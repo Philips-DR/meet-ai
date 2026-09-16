@@ -206,10 +206,12 @@ Already done, but to rebuild from scratch:
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
+./fetch-models.sh          # only if you want --diarize
 ```
 
-Requires `ffmpeg` on PATH. Models download automatically on first use and are
-cached in `~/.cache/huggingface/`.
+Requires `ffmpeg` on PATH. Whisper models download themselves on first use and
+are cached in `~/.cache/huggingface/`; the diarization models are not on PyPI,
+hence the fetch script.
 
 ## Layout
 
