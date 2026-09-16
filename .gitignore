@@ -1,0 +1,10 @@
+.venv/
+.cache/
+__pycache__/
+audio/*
+!audio/.gitkeep
+transcripts/*
+!transcripts/.gitkeep
+
+# Diarization models (~37 MB) — run ./fetch-models.sh to download
+models/
