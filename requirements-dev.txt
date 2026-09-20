@@ -1,0 +1,3 @@
+# Test-only dependencies. The suite must never need a model, audio, or the network,
+# so nothing here pulls in faster-whisper or sherpa-onnx.
+pytest==9.1.1

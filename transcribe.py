@@ -230,6 +230,35 @@ def show_progress(position: float, total: float, started: float) -> None:
 # Markdown assembly
 # --------------------------------------------------------------------------
 
+# Markdown block syntax a spoken sentence can trip over by accident. A transcript line is
+# *text*: "160. That's one more." is a sentence, not the 160th item of a list, and "- so anyway"
+# is not a bullet. Without escaping, CommonMark reads them as structure and a downstream
+# renderer faithfully builds the numbered list the speaker never meant. Found by running
+# docu-ai over a real 2-hour transcript (2026-09-20): three spoken numbers became list items.
+_BLOCK_START_RE = re.compile(r"""
+    ^(
+        \#{1,6}(?=\s|$)       # ATX heading
+      | >                      # blockquote
+      | [-+*](?=\s|$)          # bullet list
+      | \d{1,9}[.)](?=\s|$)    # ordered list
+    )
+""", re.VERBOSE)
+
+
+def escape_block_start(text: str) -> str:
+    """Escape leading block syntax so a spoken line stays a spoken line.
+
+    Escaping the marker's *last* character is what breaks the construct, and it is the only
+    form that works for every case: "15\\." is text, while "\\15." would render the backslash
+    literally, since a backslash only escapes punctuation.
+    """
+    match = _BLOCK_START_RE.match(text)
+    if not match:
+        return text
+    marker = match.group(1)
+    return f"{marker[:-1]}\\{marker[-1]}{text[len(marker):]}"
+
+
 def to_paragraphs(segments: list[dict]) -> list[list[dict]]:
     """Group segments into readable paragraphs on pauses, length and speaker."""
     paragraphs: list[list[dict]] = []
@@ -279,19 +308,66 @@ def render_markdown(source: Path, segments: list[dict], duration: float,
             continue
 
         speaker = para[0].get("speaker")
+        # Only where the text begins a line: mid-line it is already inert, and an
+        # escape there would show up as a stray backslash.
+        body = escape_block_start(text)
         if speakers and speaker != previous_speaker:
             from diarize import speaker_name
             stamp = f" *[{hhmmss(para[0]['start'])}]*" if timestamps else ""
             lines.append(f"**{speaker_name(speaker)}**{stamp}")
             lines.append("")
             previous_speaker = speaker
-            lines.append(text)
+            lines.append(body)
         elif timestamps and not speakers:
             lines.append(f"**[{hhmmss(para[0]['start'])}]** {text}")
         else:
-            lines.append(text)
+            lines.append(body)
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
+
+
+# --------------------------------------------------------------------------
+# Timeline — the spans the Markdown was rendered from
+# --------------------------------------------------------------------------
+
+# Bump when the shape of a timeline file changes, so readers can refuse one
+# they don't understand rather than misinterpreting it.
+TIMELINE_VERSION = 1
+
+
+def timeline_path(out_path: Path) -> Path:
+    """Where the timeline lands for a given Markdown output. One definition."""
+    return out_path.with_suffix(".timeline.json")
+
+
+def write_timeline(out_path: Path, source: Path, segments: list[dict],
+                   duration: float, language: str, model_name: str,
+                   speakers: int) -> Path:
+    """Persist the segments the Markdown was rendered from, as JSON beside it.
+
+    Written on every run, never optional. The Markdown is a *view* of this file,
+    not the other way round: each rendered sentence has a span here, so a quote
+    lifted from a summary can be checked back against the audio at a real offset.
+    Without it a quote is a claim; with it a quote is verifiable.
+
+    Note these are the *post-processing* segments — after diarization has split
+    and relabelled them — precisely because those are what the prose corresponds
+    to. Persisting the pre-diarization ones would not line up with the text.
+    """
+    payload = {
+        "version": TIMELINE_VERSION,
+        "source": source.name,
+        "duration": duration,
+        "language": language,
+        "model": model_name,
+        "speakers": speakers,
+        "transcribed": dt.datetime.now().isoformat(timespec="seconds"),
+        "segments": segments,
+    }
+    path = timeline_path(out_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return path
 
 
 # --------------------------------------------------------------------------
@@ -301,7 +377,10 @@ def render_markdown(source: Path, segments: list[dict], duration: float,
 def transcribe_file(model, path: Path, args) -> Path | None:
     out_path = Path(args.output_dir) / f"{path.stem}.md"
     if out_path.exists() and not args.force:
-        print(f"·  skip (already done): {out_path.name}")
+        # A transcript written before timelines existed has no spans beside it,
+        # and there is no way to rebuild them without decoding the audio again.
+        missing = "" if timeline_path(out_path).exists() else "  (no timeline — rerun with -f)"
+        print(f"·  skip (already done): {out_path.name}{missing}")
         return None
 
     duration = probe_duration(path)
@@ -419,12 +498,14 @@ def finish(path: Path, out_path: Path, segments: list[dict], duration: float,
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(markdown, encoding="utf-8")
+    write_timeline(out_path, path, segments, duration, language, args.model, speakers)
 
     took = time.monotonic() - started
     words = sum(len(s["text"].split()) for s in segments)
     shown = out_path.relative_to(ROOT) if out_path.is_relative_to(ROOT) else out_path
     extra = f", {speakers} speakers" if speakers else ""
     print(f"✓  {shown}  ({language}, ~{words} words{extra}, took {hhmmss(took)})")
+    print(f"   {timeline_path(shown)}  ({len(segments)} spans)")
     return out_path
 
 
