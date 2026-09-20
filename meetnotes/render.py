@@ -87,7 +87,9 @@ def write_notes(out_path: Path, notes: VerifiedNotes, title: str, source: str,
         render_markdown(notes, title, source, duration), encoding="utf-8"
     )
 
-    json_path = out_path.with_suffix(".notes.json")
+    # out_path is already "<stem>.notes.md", so swapping the extension alone gives
+    # "<stem>.notes.json". Appending ".notes.json" would yield "<stem>.notes.notes.json".
+    json_path = out_path.with_suffix(".json")
     json_path.write_text(
         json.dumps(
             {

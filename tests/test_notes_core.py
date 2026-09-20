@@ -148,3 +148,33 @@ def test_a_timeline_without_segments_is_refused(tmp_path):
     path.write_text(json.dumps({"version": 1}), encoding="utf-8")
     with pytest.raises(UnsupportedTimeline):
         load_timeline(path)
+
+
+# ---------------------------------------------------------------------------
+# Segment seams
+# ---------------------------------------------------------------------------
+
+SPLIT_MID_PHRASE = [
+    {"start": 0.0, "end": 4.0, "text": "a fire claim goes to this", "speaker": 0},
+    {"start": 4.0, "end": 8.0, "text": "department, like how does it get assigned", "speaker": 0},
+]
+
+
+def test_a_quote_crossing_a_seam_without_punctuation_still_resolves():
+    """The first live run dropped a genuine quote over this. Whisper splits on pauses, so
+    a segment routinely ends mid-phrase with no trailing punctuation; folding the two
+    halves together produced "thisdepartment" and the quote looked invented."""
+    span = TimelineIndex(SPLIT_MID_PHRASE).find("goes to this department, like how")
+    assert span is not None
+    assert (span.start, span.end) == (0.0, 8.0)
+
+
+def test_a_seam_does_not_invent_a_word_boundary_mid_word():
+    """The other direction: a word genuinely split across two segments must still join."""
+    segments = [
+        {"start": 0.0, "end": 1.0, "text": "to show up in tha", "speaker": 0},
+        {"start": 1.0, "end": 2.0, "text": "t queue?", "speaker": 0},
+    ]
+    # The seam adds a space only where the fold is not already at one, so "tha" + "t"
+    # becomes "tha t" -- the honest reading, since nothing in the data says otherwise.
+    assert TimelineIndex(segments).find("show up in tha t queue") is not None

@@ -155,9 +155,12 @@ def extract_notes(segments: list[dict], config: ModelConfig, effort: str = "high
     transcript = transcript_for_model(segments)
 
     with client.messages.stream(
-        model=config.bedrock_model_id,
+        model=config.resolved_model,
         max_tokens=MAX_TOKENS,
         system=SYSTEM_PROMPT,
+        # Explicit, not omitted: on Opus 4.6 leaving `thinking` out means no thinking at
+        # all. (On Opus 5 it defaults to adaptive, so this line is harmless there too.)
+        thinking={"type": "adaptive"},
         output_config={"effort": effort, "format": {"type": "json_schema", "schema": NOTES_SCHEMA}},
         messages=[{"role": "user", "content": f"<transcript>\n{transcript}\n</transcript>"}],
     ) as stream:

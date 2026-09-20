@@ -10,7 +10,7 @@ import os
 import sys
 from pathlib import Path
 
-from meetnotes.client import DEFAULT_MODEL, ModelConfig
+from meetnotes.client import BEDROCK, PROVIDERS, ModelConfig, resolve_provider
 from meetnotes.lexicon import apply_lexicon, load_lexicon
 from meetnotes.render import write_notes
 from meetnotes.spans import TimelineIndex
@@ -36,14 +36,23 @@ def main(argv: list[str] | None = None) -> int:
                         help="Where notes land. Default: beside the timeline")
     parser.add_argument("-l", "--lexicon", default=None,
                         help="JSON of {canonical: [alias, ...]} to correct names and jargon")
+    parser.add_argument("--provider", default=None, choices=list(PROVIDERS),
+                        help="Where to reach Claude. Default: anthropic when "
+                             "$ANTHROPIC_API_KEY is set, else bedrock")
     parser.add_argument("--region", default=os.environ.get("AWS_REGION"),
-                        help="AWS region for Bedrock. Default: $AWS_REGION")
+                        help="AWS region. Bedrock only. Default: $AWS_REGION")
     parser.add_argument("--profile", default=os.environ.get("AWS_PROFILE"),
-                        help="AWS profile. Default: $AWS_PROFILE, else the default profile")
-    parser.add_argument("--model", default=DEFAULT_MODEL, help="Model id")
+                        help="AWS profile. Bedrock only. Default: $AWS_PROFILE")
+    parser.add_argument("--api-key", default=os.environ.get("ANTHROPIC_API_KEY"),
+                        help="Anthropic API key. Default: $ANTHROPIC_API_KEY, which the "
+                             "SDK also reads on its own")
+    parser.add_argument("--model", default=None,
+                        help="Model id. Default: the current Claude model for the "
+                             "chosen provider")
     parser.add_argument("--effort", default="high",
-                        choices=["low", "medium", "high", "xhigh", "max"],
-                        help="How hard the model works on it")
+                        choices=["low", "medium", "high", "max"],
+                        help="How hard the model works on it. xhigh is omitted "
+                             "deliberately: it arrived with Opus 4.7 and 400s on 4.6")
     parser.add_argument("-n", "--dry-run", action="store_true",
                         help="Show what would be sent and spend nothing. No model call, "
                              "no files written")
@@ -94,20 +103,37 @@ def main(argv: list[str] | None = None) -> int:
         print(f"   would write {out_path} (dry run — nothing sent, nothing written)")
         return 0
 
-    if not args.region:
-        print("!  no AWS region. Pass --region or set AWS_REGION.", file=sys.stderr)
+    provider = resolve_provider(args.provider)
+    if provider == BEDROCK and not args.region:
+        print("!  no AWS region. Pass --region, set AWS_REGION, or switch provider "
+              "with --provider anthropic.", file=sys.stderr)
         return 1
 
     from meetnotes.extract import extract_notes
     from meetnotes.verify import verify
 
-    config = ModelConfig(region=args.region, model=args.model, profile=args.profile)
-    print(f"→  {timeline_path.name}  ({len(segments)} segments, {args.model}, "
-          f"effort {args.effort})")
+    config = ModelConfig(
+        provider=provider,
+        model=args.model,
+        region=args.region,
+        profile=args.profile,
+        api_key=args.api_key,
+    )
+    print(f"→  {timeline_path.name}  ({len(segments)} segments, {provider}, "
+          f"{config.resolved_model}, effort {args.effort})")
     if corrections:
         print(f"   lexicon corrected {corrections} segment(s)")
 
-    raw = extract_notes(segments, config, effort=args.effort)
+    try:
+        raw = extract_notes(segments, config, effort=args.effort)
+    except TypeError as exc:
+        # The SDK raises a bare TypeError when it can find no credentials at all. Left
+        # alone that surfaces as a traceback, which says nothing about what to do next.
+        if "authentication" not in str(exc).lower():
+            raise
+        print("!  no Anthropic credentials. Pass --api-key, set ANTHROPIC_API_KEY, or "
+              "use --provider bedrock.", file=sys.stderr)
+        return 1
     notes = verify(raw, TimelineIndex(segments))
 
     md_path, json_path = write_notes(out_path, notes, title, source, duration)

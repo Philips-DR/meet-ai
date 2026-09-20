@@ -38,7 +38,17 @@ def _fold(pieces: Iterable[tuple[str, int | None]]) -> Iterator[tuple[str, int |
     normalisers would drift apart and quietly stop matching.
     """
     previous_was_space = True  # also suppresses a leading space
+    first_piece = True
     for text, owner in pieces:
+        # Every segment boundary is a word boundary. Whisper splits on pauses, which land
+        # mid-phrase constantly -- "...goes to this" / "department, like how..." -- and
+        # without this a true quote crossing the seam folds to "thisdepartment" and is
+        # rejected as an invention. Found live on the first real run.
+        if not first_piece and not previous_was_space:
+            yield " ", owner
+            previous_was_space = True
+        first_piece = False
+
         for char in text:
             lowered = char.lower()
             if lowered.isalnum():
