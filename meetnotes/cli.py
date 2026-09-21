@@ -1,6 +1,8 @@
 """./notes -- turn a timeline into notes somebody will act on.
 
-Consumes what ./transcribe produced. Never decodes audio, never loads a Whisper model.
+The human front door. Consumes what ./transcribe produced; never decodes audio, never
+loads a Whisper model. Formats operations.py's results as prose; the MCP door formats the
+same results as JSON. Neither wraps the other.
 """
 
 from __future__ import annotations
@@ -11,10 +13,8 @@ import sys
 from pathlib import Path
 
 from meetnotes.client import BEDROCK, PROVIDERS, ModelConfig, resolve_provider
-from meetnotes.lexicon import apply_lexicon, load_lexicon
-from meetnotes.render import write_notes
-from meetnotes.spans import TimelineIndex
-from meetnotes.timeline import UnsupportedTimeline, load_timeline, timeline_for
+from meetnotes.operations import OperationError, generate_notes, preview_notes
+from meetnotes.timeline import UnsupportedTimeline, timeline_for
 
 
 def resolve_timeline(target: Path) -> Path:
@@ -26,7 +26,7 @@ def resolve_timeline(target: Path) -> Path:
     return target
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Turn a meet-ai timeline into meeting notes with verifiable quotes.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -47,8 +47,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="Anthropic API key. Default: $ANTHROPIC_API_KEY, which the "
                              "SDK also reads on its own")
     parser.add_argument("--model", default=None,
-                        help="Model id. Default: the current Claude model for the "
-                             "chosen provider")
+                        help="Model id. Default: the current Claude model for the provider")
     parser.add_argument("--effort", default="high",
                         choices=["low", "medium", "high", "max"],
                         help="How hard the model works on it. xhigh is omitted "
@@ -56,96 +55,72 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-n", "--dry-run", action="store_true",
                         help="Show what would be sent and spend nothing. No model call, "
                              "no files written")
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
 
     timeline_path = resolve_timeline(Path(args.target))
-    if not timeline_path.exists():
-        print(f"!  no timeline at {timeline_path}", file=sys.stderr)
-        print("   Transcripts written before timelines existed have none; rerun "
-              "./transcribe with -f to produce one.", file=sys.stderr)
-        return 1
+    out_dir = Path(args.output_dir) if args.output_dir else None
+    lexicon = Path(args.lexicon) if args.lexicon else None
 
     try:
-        timeline = load_timeline(timeline_path)
-    except UnsupportedTimeline as exc:
-        print(f"!  {exc}", file=sys.stderr)
-        return 1
+        if args.dry_run:
+            preview = preview_notes(timeline_path, out_dir=out_dir, lexicon_path=lexicon)
+            print(f"·  {Path(preview.timeline).name}")
+            print(f"   {preview.segments} segments, {preview.words} words, "
+                  f"~{preview.approx_tokens} tokens to send")
+            if lexicon:
+                print(f"   lexicon corrected {preview.lexicon_corrections} segment(s)")
+            print(f"   would write {preview.would_write} "
+                  f"(dry run — nothing sent, nothing written)")
+            return 0
 
-    segments = timeline["segments"]
-    source = timeline.get("source", timeline_path.stem)
-    duration = float(timeline.get("duration", 0.0))
+        provider = resolve_provider(args.provider)
+        if provider == BEDROCK and not args.region:
+            print("!  no AWS region. Pass --region, set AWS_REGION, or switch provider "
+                  "with --provider anthropic.", file=sys.stderr)
+            return 1
 
-    corrections = 0
-    if args.lexicon:
-        lexicon = load_lexicon(Path(args.lexicon))
-        corrected = apply_lexicon(segments, lexicon)
-        corrections = sum(
-            1 for before, after in zip(segments, corrected)
-            if before.get("text") != after.get("text")
+        config = ModelConfig(
+            provider=provider,
+            model=args.model,
+            region=args.region,
+            profile=args.profile,
+            api_key=args.api_key,
         )
-        segments = corrected
+        print(f"→  {timeline_path.name}  ({provider}, {config.resolved_model}, "
+              f"effort {args.effort})")
 
-    title = f"{Path(source).stem} — notes"
-    out_dir = Path(args.output_dir) if args.output_dir else timeline_path.parent
-    out_path = out_dir / f"{Path(source).stem}.notes.md"
-
-    # The preview every tool in this suite ships: everything up to the model call, and
-    # nothing that costs money or writes a file.
-    if args.dry_run:
-        from meetnotes.extract import transcript_for_model
-
-        prompt = transcript_for_model(segments)
-        print(f"·  {timeline_path.name}")
-        print(f"   {len(segments)} segments, {len(prompt.split())} words, "
-              f"~{len(prompt) // 4} tokens to send")
-        if args.lexicon:
-            print(f"   lexicon corrected {corrections} segment(s)")
-        print(f"   would write {out_path} (dry run — nothing sent, nothing written)")
+        result = generate_notes(
+            timeline_path, config, out_dir=out_dir, lexicon_path=lexicon, effort=args.effort
+        )
+        print(f"✓  {result.markdown}")
+        print(f"   {Path(result.json).name}  ({result.verified_claims} verified claims: "
+              f"{result.decisions} decisions, {result.actions} actions, "
+              f"{result.questions} questions)")
+        if result.dropped_claims:
+            # Never silent: a dropped claim is the lint working, and a signal about the
+            # prompt or the model that is worth seeing.
+            print(f"   {result.dropped_claims} claim(s) dropped — quote not found in "
+                  f"the transcript")
         return 0
 
-    provider = resolve_provider(args.provider)
-    if provider == BEDROCK and not args.region:
-        print("!  no AWS region. Pass --region, set AWS_REGION, or switch provider "
-              "with --provider anthropic.", file=sys.stderr)
+    except UnsupportedTimeline as error:
+        print(f"!  {error}", file=sys.stderr)
         return 1
-
-    from meetnotes.extract import extract_notes
-    from meetnotes.verify import verify
-
-    config = ModelConfig(
-        provider=provider,
-        model=args.model,
-        region=args.region,
-        profile=args.profile,
-        api_key=args.api_key,
-    )
-    print(f"→  {timeline_path.name}  ({len(segments)} segments, {provider}, "
-          f"{config.resolved_model}, effort {args.effort})")
-    if corrections:
-        print(f"   lexicon corrected {corrections} segment(s)")
-
-    try:
-        raw = extract_notes(segments, config, effort=args.effort)
-    except TypeError as exc:
+    except OperationError as error:
+        print(f"!  {error}", file=sys.stderr)
+        return 1
+    except TypeError as error:
         # The SDK raises a bare TypeError when it can find no credentials at all. Left
         # alone that surfaces as a traceback, which says nothing about what to do next.
-        if "authentication" not in str(exc).lower():
+        if "authentication" not in str(error).lower():
             raise
         print("!  no Anthropic credentials. Pass --api-key, set ANTHROPIC_API_KEY, or "
               "use --provider bedrock.", file=sys.stderr)
         return 1
-    notes = verify(raw, TimelineIndex(segments))
-
-    md_path, json_path = write_notes(out_path, notes, title, source, duration)
-
-    print(f"✓  {md_path}")
-    print(f"   {json_path.name}  ({notes.claim_count} verified claims)")
-    if notes.dropped:
-        # Never silent: a dropped claim is the lint working, and also a signal about the
-        # prompt or the model that is worth seeing.
-        print(f"   {len(notes.dropped)} claim(s) dropped — quote not found in the "
-              f"transcript")
-    return 0
 
 
 if __name__ == "__main__":

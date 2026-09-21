@@ -26,3 +26,6 @@ typing_extensions==4.16.0
 
 # Notes layer (meetnotes/) -- the Bedrock extra pulls in botocore for SigV4 signing.
 anthropic[bedrock]==1.7.0
+
+# MCP front door (meetnotes/mcp_server.py) -- the model-facing door beside the CLIs.
+mcp==2.2.0

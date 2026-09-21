@@ -509,7 +509,12 @@ def finish(path: Path, out_path: Path, segments: list[dict], duration: float,
     return out_path
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The canonical argument surface, and the single source of every default.
+
+    Extracted from main() so meetnotes/operations.py can obtain a fully-defaulted options
+    object without restating twenty defaults that would then drift from these.
+    """
     parser = argparse.ArgumentParser(
         description="Transcribe audio to Markdown with Whisper.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -560,6 +565,11 @@ def main() -> int:
                         help="Minimum silence length to cut on, seconds")
     parser.add_argument("--keep-cache", action="store_true",
                         help="Keep per-chunk JSON after finishing")
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
     args = parser.parse_args()
 
     if str(args.chunk_minutes).lower() == "auto":

@@ -1,9 +1,14 @@
-# Whisper → Markdown
+# meet-ai
 
 Drop audio in `audio/`, run one command, get a Markdown transcript in `transcripts/`.
+Run a second command and get meeting notes in which every claim cites the moment it was said.
 
-Runs fully offline on CPU via [faster-whisper](https://github.com/SYSTRAN/faster-whisper).
-No PyTorch, no GPU, no API calls — the audio never leaves the machine.
+Transcription runs fully offline on CPU via [faster-whisper](https://github.com/SYSTRAN/faster-whisper).
+No PyTorch, no GPU, no API calls — the audio never leaves the machine. Only the notes step
+talks to a model, and only ever sees text.
+
+Three ways in, all over the same code: `./transcribe` and `./notes` for a person, and `./mcp`
+for a model.
 
 ## Usage
 
@@ -41,6 +46,63 @@ Next paragraph, split where the speaker paused.
 ```
 
 The YAML frontmatter means it drops straight into Obsidian or any notes tool.
+
+## Notes
+
+```bash
+./notes transcripts/meeting.md            # notes beside the transcript
+./notes transcripts/meeting.md -n         # dry run — nothing sent, nothing written
+./notes transcripts/meeting.md -l lex.json  # fix names and jargon first
+```
+
+Output is a `.notes.md` you read and a `.notes.json` carrying machine-readable spans:
+
+```markdown
+## Decisions
+
+- Billing moves to the new provider before the quarter closes.
+  > "so we're agreed, we cut over before the quarter closes" — Speaker 2, 00:42:15
+```
+
+**Why the quotes are there, and why they can be trusted.** The model never sees a
+timestamp, so it has nothing to echo. It is required to quote verbatim, and the *search* for
+that quote in the timeline is what attaches a real offset. A quote that does not appear in
+the transcript resolves to nothing and the claim is dropped before you ever read it. The
+model produces words; only arithmetic produces numbers.
+
+A dropped claim is reported, not swallowed — it is the check working, and it is also a
+signal about the prompt worth seeing.
+
+**What a span proves is *what* was said and *when*, not *who*.** Speaker attribution rests
+on diarization, which is serviceable and not reliable (below), so notes name an owner only
+when a name is actually spoken — "Kwame will send the contract" — and never because of a
+speaker label.
+
+This step needs a timeline, which is written beside every transcript. Transcripts produced
+before timelines existed have none; re-run with `-f` to get one.
+
+### Where the model comes from
+
+Bedrock by default, or the Anthropic API when `ANTHROPIC_API_KEY` is set — `--provider`
+forces either. Credentials are passed in, never discovered: `--region`, `--profile`,
+`--api-key`, `--model`.
+
+## For a model to call
+
+```bash
+./mcp                                     # MCP server on stdio
+```
+
+Four tools, the same operations the CLIs use: `list_recordings`, `preview_notes`,
+`generate_notes`, `transcribe`. The two that spend nothing are marked read-only so a caller
+can tell at a glance which are safe to run unattended.
+
+`transcribe` is capped at 15 minutes of audio. Decoding takes roughly as long as the
+recording, so a real meeting would hang the call and time out with nothing to show; longer
+files are for `./transcribe` in a terminal until there is a background job to hand them to.
+
+Paths and credentials are injected, not assumed — `MEET_AI_AUDIO`, `MEET_AI_TRANSCRIPTS`,
+`MEET_AI_PROVIDER`, `MEET_AI_MODEL`.
 
 ## Accuracy
 
@@ -219,8 +281,14 @@ hence the fetch script.
 audio/         drop audio here (mp3, wav, m4a, flac, mp4, mkv, ...)
 transcripts/   Markdown output
 transcribe     wrapper — runs the venv Python for you
+notes          wrapper — turns a timeline into notes
+mcp            wrapper — the MCP front door, on stdio
 transcribe.py  the actual pipeline
 diarize.py     speaker labelling (optional, --diarize)
+meetnotes/     operations.py (what this tool can be asked to do, as data), cli.py and
+               mcp_server.py (the two front doors), extract.py (the one model call),
+               spans.py (quote → offset, no model), verify.py, render.py, lexicon.py
+tests/         no model, no audio, no network
 models/        ONNX diarization models (~37 MB)
 .cache/        per-chunk resume data, only used with --chunk-minutes
 ```
