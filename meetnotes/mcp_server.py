@@ -25,8 +25,12 @@ from meetnotes.operations import (
     OperationError,
     as_dict,
     generate_notes,
+    list_audio_sources,
     list_recordings,
     preview_notes,
+    recording_status,
+    start_recording,
+    stop_recording,
     transcribe_audio,
 )
 
@@ -144,6 +148,77 @@ def create_meet_ai_server(paths: ServerPaths, config: ModelConfig) -> MCPServer:
                 )
             )
         except (OperationError, OSError, ValueError) as error:
+            return _failed(error)
+
+    @server.tool(
+        name="list_audio_sources",
+        title="List microphones and output monitors",
+        description=(
+            "Every capture source this machine exposes. Microphones capture the room; a "
+            "'.monitor' source captures what the speakers are playing, which on a call is "
+            "everyone except the user. Reads only."
+        ),
+        annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+    )
+    def _list_audio_sources() -> dict:
+        try:
+            return {"sources": list_audio_sources()}
+        except OperationError as error:
+            return _failed(error)
+
+    @server.tool(
+        name="recording_status",
+        title="Is anything recording?",
+        description=(
+            "The unfinished recording session, if there is one, and how much audio it has "
+            "on disk. A session whose recorder died is reported as 'orphaned' -- its audio "
+            "is still there and stop_recording will recover it. Reads only."
+        ),
+        annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+    )
+    def _recording_status() -> dict:
+        try:
+            return {"session": recording_status(paths.audio_dir)}
+        except OperationError as error:
+            return _failed(error)
+
+    @server.tool(
+        name="start_recording",
+        title="Start recording a meeting",
+        description=(
+            "Begin recording from a microphone, in the background, and return at once. "
+            "Nothing blocks while the meeting happens; call stop_recording when it ends. "
+            "Pass `consent` describing who agreed to be recorded and how -- it is stored "
+            "with the audio. Refuses if a recording is already running."
+        ),
+        annotations=ToolAnnotations(
+            read_only_hint=False, destructive_hint=False, open_world_hint=False
+        ),
+    )
+    def _start_recording(source: str | None = None, consent: str | None = None,
+                         name: str | None = None) -> dict:
+        try:
+            return start_recording(paths.audio_dir, source=source, consent=consent, name=name)
+        except OperationError as error:
+            return _failed(error)
+
+    @server.tool(
+        name="stop_recording",
+        title="Stop recording, and save the audio",
+        description=(
+            "End the running recording and write it as lossless FLAC, warning if it came "
+            "out silent. Also recovers an interrupted session from what reached disk. "
+            "Returns the audio path, ready for transcription -- though recordings longer "
+            f"than {MAX_SYNC_AUDIO_SECONDS // 60} minutes must be transcribed from a terminal."
+        ),
+        annotations=ToolAnnotations(
+            read_only_hint=False, destructive_hint=False, open_world_hint=False
+        ),
+    )
+    def _stop_recording(session_id: str | None = None) -> dict:
+        try:
+            return stop_recording(paths.audio_dir, session_id)
+        except OperationError as error:
             return _failed(error)
 
     return server

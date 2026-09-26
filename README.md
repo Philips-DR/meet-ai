@@ -13,6 +13,26 @@ model.
 > `plan.md` holds the decisions and what is left to build. `CLAUDE.md` holds the engineering rules
 > and the measured facts behind the defaults below.
 
+## Recording
+
+```bash
+./record --consent "verbal, all present"    # foreground; Ctrl-C to stop
+./record start --consent "..."              # background -- survives closing the terminal
+./record status
+./record stop                               # writes audio/<timestamp>.flac
+./record sources                            # microphones, and output monitors for calls
+```
+
+Lossless FLAC at 48 kHz, plus a `.session.json` beside it recording the device and who
+consented. A silent recording — the muted-microphone failure — is flagged when it stops.
+
+**Recording is crash-safe.** If the recorder dies, the terminal closes, or the machine reboots
+mid-meeting, `./record status` reports the session as interrupted and `./record stop`
+recovers everything that reached disk.
+
+**What this does not do is improve accuracy.** One microphone in a room is one microphone in
+a room: everyone in it goes into the recording mixed, and speaker labels are still inferred.
+
 ## Transcribing
 
 ```bash
@@ -120,9 +140,14 @@ either. Credentials are passed in, never discovered: `--region`, `--profile`, `-
 ./mcp                            # MCP server on stdio
 ```
 
-Four tools, the same operations the CLIs use: `list_recordings`, `preview_notes`, `generate_notes`,
-`transcribe`. The two that spend nothing are marked read-only so a caller can tell at a glance which
-are safe to run unattended.
+Eight tools, the same operations the CLIs use: `list_recordings`, `preview_notes`,
+`generate_notes`, `transcribe`, and for recording `list_audio_sources`, `recording_status`,
+`start_recording`, `stop_recording`. Those that spend nothing are marked read-only so a caller can
+tell at a glance which are safe to run unattended; starting a recording is not, because it turns
+on a microphone.
+
+Recording is a session — `start_recording` and `stop_recording` both return at once — so "record
+this meeting" works through the assistant without a chat turn blocking until the meeting ends.
 
 `transcribe` is capped at 15 minutes of audio — decoding takes roughly as long as the recording, so
 longer files are for `./transcribe` in a terminal. Paths and credentials are injected:
@@ -153,10 +178,12 @@ No model, no audio, no network.
 ```
 audio/         drop audio here (mp3, wav, m4a, flac, mp4, mkv, ...)
 transcripts/   Markdown output and the timeline beside it
+record         wrapper — capture a meeting
 transcribe     wrapper — audio to transcript
 notes          wrapper — timeline to notes
 mcp            wrapper — the MCP front door, on stdio
-transcribe.py  layers 1-3: chunk planning, decoding, Markdown
+capture.py     layer 1: recording sessions
+transcribe.py  layers 2-3: chunk planning, decoding, Markdown
 diarize.py     speaker labelling (optional, --diarize)
 meetnotes/     operations.py (what this tool can be asked to do, as data), cli.py and
                mcp_server.py (the two front doors), extract.py (the one model call),

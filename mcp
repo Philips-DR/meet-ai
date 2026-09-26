@@ -8,4 +8,7 @@ if [[ ! -x "$DIR/.venv/bin/python" ]]; then
   exit 1
 fi
 
+# The server imports transcribe.py and capture.py from the repo root, so it must run there
+# regardless of where it was launched from.
+cd "$DIR"
 exec "$DIR/.venv/bin/python" -m meetnotes.mcp_server "$@"

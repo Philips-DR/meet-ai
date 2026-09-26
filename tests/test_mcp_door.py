@@ -53,9 +53,12 @@ def call(server, name, **arguments) -> dict:
     return json.loads(text)
 
 
-def test_the_door_advertises_exactly_four_operations(server):
+def test_the_door_advertises_exactly_its_operations(server):
     names = sorted(tool.name for tool in asyncio.run(server.list_tools()))
-    assert names == ["generate_notes", "list_recordings", "preview_notes", "transcribe"]
+    assert names == [
+        "generate_notes", "list_audio_sources", "list_recordings", "preview_notes",
+        "recording_status", "start_recording", "stop_recording", "transcribe",
+    ]
 
 
 def test_the_operations_that_spend_nothing_are_marked_read_only(server):
@@ -65,8 +68,13 @@ def test_the_operations_that_spend_nothing_are_marked_read_only(server):
     }
     assert read_only["preview_notes"] is True
     assert read_only["list_recordings"] is True
+    assert read_only["list_audio_sources"] is True
+    assert read_only["recording_status"] is True
     assert read_only["generate_notes"] is False
     assert read_only["transcribe"] is False
+    # Starting a recording turns on a microphone; it must pass through an approval gate.
+    assert read_only["start_recording"] is False
+    assert read_only["stop_recording"] is False
 
 
 def test_listing_reports_which_transcripts_can_actually_have_notes(server):

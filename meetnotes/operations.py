@@ -282,3 +282,51 @@ def transcribe_audio(audio_path: Path, out_dir: Path, diarize: bool = False,
 def as_dict(value: object) -> dict:
     """Dataclass to plain JSON-able dict, for a door that returns JSON."""
     return asdict(value)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Capture (layer 1)
+# ---------------------------------------------------------------------------
+#
+# Recording is a session, not a call: start and stop both return at once, and the audio is
+# written by a detached recorder in between. That is what lets a model say "record this
+# meeting" without a chat turn blocking until the meeting ends.
+
+def list_audio_sources() -> list[dict]:
+    import capture
+
+    try:
+        return capture.list_sources()
+    except capture.CaptureError as error:
+        raise OperationError(str(error)) from error
+
+
+def recording_status(audio_dir: Path) -> dict | None:
+    """The unfinished session, if any -- including one whose recorder died, which `stop`
+    will still recover."""
+    import capture
+
+    session = capture.active(audio_dir)
+    if session is None:
+        return None
+    return {**asdict(session), "recorded_seconds": round(capture.elapsed_seconds(session), 1)}
+
+
+def start_recording(audio_dir: Path, source: str | None = None, consent: str | None = None,
+                    name: str | None = None) -> dict:
+    import capture
+
+    try:
+        return asdict(capture.start(audio_dir, source=source, consent=consent, name=name))
+    except capture.CaptureError as error:
+        raise OperationError(str(error)) from error
+
+
+def stop_recording(audio_dir: Path, session_id: str | None = None) -> dict:
+    """Finish a session, or recover an interrupted one. Returns where the audio landed."""
+    import capture
+
+    try:
+        return asdict(capture.stop(audio_dir, session_id))
+    except capture.CaptureError as error:
+        raise OperationError(str(error)) from error

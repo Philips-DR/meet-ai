@@ -30,24 +30,29 @@ assistant decides when to call either. Neither tool knows the other's internals.
 | M0 | A transcript through `docu-ai build` | Done — found two format gaps, both fixed |
 | M1 | Persist the timeline beside the markdown | Done |
 | M2 | Tests over the pure functions | Done |
-| M3 | Layer 1: two-channel capture | **Not started — the only missing layer** |
+| M3a | Layer 1: single-source capture as a session | Done — crash-safe, on both doors |
+| M3b | Layer 1: two-channel capture for calls | Not started |
 | M4 | Notes that carry spans, and the lint | Done |
 | M5 | MCP front door beside the CLI | Done |
 
-### M3, the one that is left
+### M3b, what is left of layer 1
 
-Layer 1 does not exist. Audio arrives in `audio/` by hand, recorded some other way.
+Single-source capture exists and is a convenience, not an accuracy gain: one microphone in a room
+records everyone mixed, and the real recording in this repo — mono, two hours, nine speakers — is
+exactly that case.
 
-The prize is not convenience. On PipeWire the microphone and the system monitor source can be
-captured separately, and then **speaker identity for one participant is exact rather than
-probabilistic** — diarization only has to solve the other side. Given that diarization is the
-weakest link in the whole pipeline (CLAUDE.md is blunt about it), removing half the problem by
-changing how the recording is made is worth more than any tuning.
+Two-channel capture would change that **only on calls.** On PipeWire the microphone and the system
+monitor are separate streams; recording them as two files, transcribing each and merging by offset
+would make one participant's identity exact and leave diarization only the rest. It helps nothing
+in a room, where everyone shares the same air.
 
-Also belongs here: making consent a first-class option rather than something bolted on, since
-recording meetings has a surface that grows the moment this is used with anyone else.
+For in-person meetings the lever is **speaker enrollment** instead: a short voice sample per person,
+so clusters come back as names and attribution stops being a guess for anyone enrolled. That is the
+more valuable next step for the recordings this tool is actually used on.
 
 ## Deliberately not built
+
+- **Recording on the MCP door as a blocking call.** It is a session instead; see CLAUDE.md.
 
 - **A background job runner.** The MCP door caps synchronous transcription at fifteen minutes of
   audio and points longer files at the CLI. Lifting that cap means a job with a status operation,

@@ -40,7 +40,8 @@ Markdown is a *view* of that file, not the other way round.
 - **meet-ai never talks to Google Docs.** Output is markdown plus a timeline JSON. docu-ai compiles
   it. Neither tool knows the other's internals.
 - **Layer 6 never mutates.** It drops claims; it does not rewrite them.
-- **Layer 1 does not exist yet.** Audio is dropped into `audio/` by hand.
+- **Layer 1 is single-source today.** One microphone; the two-channel mode that would make one
+  speaker's identity exact on calls is not built.
 
 ## The headline requirement, expressed as a mechanism
 
@@ -113,6 +114,39 @@ boundaries then break it.**
 
 **Timestamps are shifted into whole-file time at the moment a segment is created**, never carried
 across a boundary afterwards.
+
+## Capture — layer 1
+
+**Recording is a session, not a long-running call.** It ends when a person says stop, which no
+request/response call can model at any duration. `start` and `stop` both return at once; the audio
+is written by a detached ffmpeg nobody waits on; the state between them lives on disk. This is what
+lets the assistant say "record this meeting". It needed no job machinery — transcription still does.
+
+- **Raw PCM, with the session JSON as its header.** A WAV records its length in a header finalised
+  only on a clean exit, so a killed recorder can leave a file claiming zero samples: a two-hour
+  meeting that decodes as silence. Raw PCM has no header to corrupt — every byte is audio, and the
+  rate and channels needed to read it are in the session file. Crash-safe by construction rather
+  than by recovery code. FLAC is written only on a clean stop. The test for this kills the recorder
+  with SIGKILL and recovers the meeting.
+- **`-flush_packets 1` is load-bearing, measured.** Without it ffmpeg writes in 256 KiB blocks —
+  about 2.7 s at 48 kHz mono, over 8 s at 16 kHz. The file grows in jumps, `start()` waited 2.3 s
+  for the first one, and a crash loses whatever sat in the buffer, which is precisely the loss raw
+  PCM was chosen to avoid. With it, `start()` returns in 0.1 s and the file tracks the clock.
+- **Confirm audio is flowing before claiming to record.** A bad device makes ffmpeg exit at once;
+  `start()` watches for that and fails immediately rather than letting a "recording" that captured
+  nothing be discovered after the meeting.
+- **Never signal a pid without checking it is still our recorder** — `/proc/<pid>/cmdline` must be
+  ffmpeg writing this exact file, and not a zombie. A pid from before a reboot can be anything.
+- **In-progress audio lives in `.recording/` with a `.pcm.part` extension.** `find_audio()` globs
+  recursively, and a half-finished recording it could see would be transcribed half-finished.
+- **The recorder runs in its own session** so a terminal's Ctrl-C does not reach it directly;
+  `stop()` interrupts it deliberately, which is what gives ffmpeg the chance to flush.
+- **48 kHz, lossless.** Whisper resamples to 16 kHz anyway, so 16 k would lose nothing today — and
+  foreclose re-running with a better model later. Roughly 350 MB for two hours.
+- **A silent recording is flagged on stop**, from `volumedetect` in the same pass as the FLAC
+  encode so a long recording is read once.
+- **Capture does not improve accuracy** for a single microphone in a room. Say so wherever it is
+  described, because the natural assumption is that it would.
 
 ## Diarization — what it is honestly worth
 
