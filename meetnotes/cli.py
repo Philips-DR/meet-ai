@@ -45,9 +45,10 @@ def build_parser() -> argparse.ArgumentParser:
                              "SDK also reads on its own")
     parser.add_argument("--model", default=None,
                         help="Model id. Default: the current Claude model for the provider")
-    parser.add_argument("--effort", default="high",
+    parser.add_argument("--effort", default=None,
                         choices=["low", "medium", "high", "max"],
-                        help="How hard the model works on it. xhigh is omitted "
+                        help="How hard the model works on it. Default: high for notes, "
+                             "medium for minutes. xhigh is omitted "
                              "deliberately: it arrived with Opus 4.7 and 400s on 4.6")
     parser.add_argument("--minutes", action="store_true",
                         help="Write formal minutes instead of notes: opening, each agenda "
@@ -92,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
             api_key=args.api_key,
         )
         print(f"→  {timeline_path.name}  ({provider}, {config.resolved_model}, "
-              f"effort {args.effort})")
+              f"effort {args.effort or 'default'})")
 
         if args.minutes:
             minutes = generate_minutes(
@@ -100,14 +101,16 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(f"✓  {minutes.markdown}")
             print(f"   {minutes.title}")
-            print(f"   {len(minutes.items)} agenda items, {minutes.verified_claims} verified points")
+            print(f"   {len(minutes.items)} agenda items, {minutes.verified_claims} verified points "
+                  f"({minutes.output_tokens} output tokens, {minutes.seconds:.0f}s)")
             if minutes.dropped_claims:
                 print(f"   {minutes.dropped_claims} point(s) dropped — quote not found in "
                       f"the transcript")
             return 0
 
         result = generate_notes(
-            timeline_path, config, out_dir=out_dir, lexicon_path=lexicon, effort=args.effort
+            timeline_path, config, out_dir=out_dir, lexicon_path=lexicon,
+            effort=args.effort or "high",
         )
         print(f"✓  {result.markdown}")
         print(f"   {Path(result.json).name}  ({result.verified_claims} verified claims: "

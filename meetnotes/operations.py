@@ -159,12 +159,15 @@ class NotesResult:
     actions: int
     questions: int
     model: str
+    effort: str = ""
+    output_tokens: int = 0
+    seconds: float = 0.0
 
 
 def generate_notes(timeline_path: Path, config: ModelConfig, out_dir: Path | None = None,
                    lexicon_path: Path | None = None, effort: str = "high") -> NotesResult:
     """Read a timeline, ask a model what happened, keep only the claims it can evidence."""
-    from meetnotes.extract import extract_notes
+    from meetnotes.extract import ModelOutOfRoom, extract_notes
     from meetnotes.verify import verify
 
     timeline_path = resolve_timeline(timeline_path)
@@ -172,7 +175,10 @@ def generate_notes(timeline_path: Path, config: ModelConfig, out_dir: Path | Non
     source = timeline.get("source", timeline_path.stem)
     duration = float(timeline.get("duration", 0.0))
 
-    raw = extract_notes(segments, config, effort=effort)
+    try:
+        raw, usage = extract_notes(segments, config, effort=effort)
+    except ModelOutOfRoom as error:
+        raise OperationError(f"no notes written: {error}") from error
     notes = verify(raw, TimelineIndex(segments))
 
     target_dir = out_dir or timeline_path.parent
@@ -194,6 +200,9 @@ def generate_notes(timeline_path: Path, config: ModelConfig, out_dir: Path | Non
         actions=len(notes.actions),
         questions=len(notes.questions),
         model=config.resolved_model,
+        effort=effort,
+        output_tokens=usage.output_tokens,
+        seconds=usage.seconds,
     )
 
 
@@ -219,20 +228,27 @@ class MinutesResult:
     verified_claims: int
     dropped_claims: int
     model: str
+    effort: str
+    output_tokens: int
+    seconds: float
 
 
 def generate_minutes(timeline_path: Path, config: ModelConfig, out_dir: Path | None = None,
-                     lexicon_path: Path | None = None, effort: str = "high") -> MinutesResult:
+                     lexicon_path: Path | None = None, effort: str | None = None) -> MinutesResult:
     """Formal minutes, held to the notes' rule: every point must be found in the transcript."""
-    from meetnotes.extract import extract_minutes
+    from meetnotes.extract import MINUTES_EFFORT, ModelOutOfRoom, extract_minutes
     from meetnotes.verify import verify_minutes
 
+    effort = effort or MINUTES_EFFORT
     timeline_path = resolve_timeline(timeline_path)
     timeline, segments, _ = _load_segments(timeline_path, lexicon_path)
     source = timeline.get("source", timeline_path.stem)
     duration = float(timeline.get("duration", 0.0))
 
-    raw = extract_minutes(segments, config, effort=effort)
+    try:
+        raw, usage = extract_minutes(segments, config, effort=effort)
+    except ModelOutOfRoom as error:
+        raise OperationError(f"no minutes written: {error}") from error
     minutes = verify_minutes(raw, TimelineIndex(segments))
 
     target_dir = out_dir or timeline_path.parent
@@ -247,6 +263,9 @@ def generate_minutes(timeline_path: Path, config: ModelConfig, out_dir: Path | N
         verified_claims=minutes.claim_count,
         dropped_claims=len(minutes.dropped),
         model=config.resolved_model,
+        effort=effort,
+        output_tokens=usage.output_tokens,
+        seconds=usage.seconds,
     )
 
 

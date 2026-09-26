@@ -82,6 +82,22 @@ minutes-specific:
 - **Attendance is never generated.** The rendered minutes leave "Present:" and "Apologies:" for the
   secretary. Nothing in a recording shows who was in the room.
 
+**Minutes are a record of business, not a transcript — and the prompt has to say so.** Asked only
+for "every point, quoted", the first live run on a two-hour meeting produced 84 points under 24
+headings, 2,400 words, eight pages: every vendor's price list and phone number, each matter of
+other business under its own heading, points repeated across items. The prompt now says what
+minutes keep (reported, decided, actioned), puts all presentations in one item and all other
+business in another, and gives a length to aim at. Same meeting: 43 points, 6 items, 1,300 words,
+four pages, nothing dropped.
+
+**Minutes run at `medium` effort; notes at `high`. Measured, not assumed.** At `high` that first run
+took 608 s, and a rerun with the longer prompt thought through all 32,000 output tokens and
+returned no answer at all — thinking, not writing, was the time. At `medium` the same meeting took
+84 s and 3,073 output tokens *including* thinking. Lower effort thins the thinking, not the check:
+every point must still resolve. Every result now reports `output_tokens` and `seconds`, and a
+response cut off at `max_tokens` raises `OperationError` saying so, instead of a bare
+`StopIteration` surfacing as "Error executing tool" nine minutes later.
+
 Minutes lines carry a timestamp, not the quote — they are read aloud for adoption and the quote
 under every line would bury them. The quote is in `.minutes.json`. Headings are never numbered:
 `## 1. Medical claims` starts like a list item, which is exactly what docu-ai's residue lint flags.

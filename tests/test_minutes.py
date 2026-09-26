@@ -123,3 +123,45 @@ def test_points_within_a_section_follow_the_recording_too():
             "resolutions": [], "actions": []}
     minutes = verify_minutes(raw(items=[item]), INDEX)
     assert [c.text for c in minutes.items[0].discussion] == ["Claims were slow.", "Write to the authority."]
+
+
+class _FakeStream:
+    def __init__(self, message):
+        self.message = message
+    def __enter__(self):
+        return self
+    def __exit__(self, *exc):
+        return False
+    def get_final_message(self):
+        return self.message
+
+
+def _fake_client(content, stop_reason):
+    from types import SimpleNamespace as NS
+    message = NS(content=content, stop_reason=stop_reason, usage=NS(input_tokens=18000, output_tokens=32000))
+    return NS(messages=NS(stream=lambda **kwargs: _FakeStream(message)))
+
+
+def test_a_model_that_thinks_past_its_budget_fails_clearly(monkeypatch, tmp_path):
+    """Found live: a minutes run thought through all 32,000 output tokens and returned no text
+    block at all. That surfaced as a bare StopIteration deep in the MCP layer -- 'Error
+    executing tool' after nine minutes, with nothing to act on."""
+    import json
+    import pytest
+    from types import SimpleNamespace as NS
+    import meetnotes.extract as extract
+    from meetnotes.client import ModelConfig
+    from meetnotes.operations import OperationError, generate_minutes
+
+    monkeypatch.setattr(extract, "build_client",
+                        lambda config: _fake_client([NS(type="thinking", thinking="...")], "max_tokens"))
+    timeline = tmp_path / "m.timeline.json"
+    timeline.write_text(json.dumps({"version": 1, "source": "m.m4a", "duration": 10.0, "segments": SEGMENTS}))
+    with pytest.raises(OperationError, match="all 32000 output tokens thinking.*lower effort"):
+        generate_minutes(timeline, ModelConfig(region="us-east-1"))
+    assert not (tmp_path / "m.minutes.md").exists()
+
+
+def test_minutes_default_to_a_lower_effort_than_notes():
+    from meetnotes.extract import MINUTES_EFFORT
+    assert MINUTES_EFFORT == "medium"

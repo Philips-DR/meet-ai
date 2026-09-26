@@ -147,14 +147,30 @@ def transcript_for_model(segments: list[dict]) -> str:
     return "\n".join(lines).strip()
 
 
+class ModelOutOfRoom(Exception):
+    """The model spent its whole output budget -- thinking included -- before answering."""
+
+
+@dataclass(frozen=True)
+class Usage:
+    """What a call cost. output_tokens includes thinking, which is where the time goes: a
+    minutes run once thought through all 32,000 tokens and returned no answer at all."""
+
+    input_tokens: int
+    output_tokens: int
+    seconds: float
+
+
 def _structured_call(segments: list[dict], config: ModelConfig, effort: str,
-                     system: str, schema: dict) -> dict:
+                     system: str, schema: dict) -> tuple[dict, Usage]:
     """One model call over the whole transcript, answered in `schema`. Streamed, because
     it is a long one."""
     import json
+    import time
 
     client = build_client(config)
     transcript = transcript_for_model(segments)
+    began = time.monotonic()
 
     with client.messages.stream(
         model=config.resolved_model,
@@ -168,13 +184,27 @@ def _structured_call(segments: list[dict], config: ModelConfig, effort: str,
     ) as stream:
         message = stream.get_final_message()
 
-    # output_config.format guarantees the first text block is valid JSON of this shape.
-    text = next(block.text for block in message.content if block.type == "text")
-    return json.loads(text)
+    usage = Usage(
+        input_tokens=int(getattr(message.usage, "input_tokens", 0) or 0),
+        output_tokens=int(getattr(message.usage, "output_tokens", 0) or 0),
+        seconds=round(time.monotonic() - began, 1),
+    )
+    text = next((block.text for block in message.content if block.type == "text"), None)
+    # output_config.format guarantees valid JSON of this shape -- but only if the answer was
+    # written at all. A response cut off at max_tokens has none, or only half of one.
+    if text is None or message.stop_reason == "max_tokens":
+        raise ModelOutOfRoom(
+            f"the model used all {usage.output_tokens} output tokens"
+            f"{' thinking' if text is None else ''} and stopped before finishing its answer "
+            f"({usage.seconds:.0f}s). Try a lower effort."
+        )
+    return json.loads(text), usage
 
 
-def extract_notes(segments: list[dict], config: ModelConfig, effort: str = "high") -> RawNotes:
-    return RawNotes.from_json(_structured_call(segments, config, effort, SYSTEM_PROMPT, NOTES_SCHEMA))
+def extract_notes(segments: list[dict], config: ModelConfig,
+                  effort: str = "high") -> tuple[RawNotes, Usage]:
+    data, usage = _structured_call(segments, config, effort, SYSTEM_PROMPT, NOTES_SCHEMA)
+    return RawNotes.from_json(data), usage
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +261,9 @@ MINUTES_SCHEMA = {
                         "type": "string",
                         "description": (
                             "A short agenda-style heading, e.g. 'Minutes of the previous "
-                            "meeting', 'Medical claims', 'Any other business'. No numbering."
+                            "meeting', 'Medical claims'. All visitors' presentations share one "
+                            "item, 'Presentations'; all other business shares one item, 'Any "
+                            "other business'. No numbering."
                         ),
                     },
                     "discussion": _claims(
@@ -262,7 +294,24 @@ so they must be accurate above all else.
 Write in the register of minutes: past tense, third person, plain and formal -- "The \
 Chairman informed members that...", "Members were reminded to...", "It was agreed that...". \
 Group what was said under the agenda items the meeting actually took, in the order it took \
-them. Vendor presentations, announcements and any other business are items too.
+them.
+
+Minutes are a record of business, not a transcript. Keep what was reported, what was \
+decided, and what somebody is to do. Leave out everything else. In particular:
+
+- Presentations by outside visitors -- banks, vendors, speakers -- go in ONE item called \
+"Presentations", with one point per presenter saying who they were and what they offered. \
+No prices, terms, product lists or phone numbers.
+- Everything raised under any other business goes in ONE item called "Any other business", \
+one or two points per matter. Do not give each matter its own item.
+- Record each fact once. If a matter comes up twice, record it where it was dealt with. An \
+action that restates a discussion point replaces that point; it does not repeat it.
+- Leave out asides, pleasantries, jokes, logistics (seating, food, photographs) and anything \
+said only in passing.
+- One sentence per point where one will do.
+
+A two-hour meeting's minutes normally run to thirty or forty points and fit on two or three \
+pages. If you find yourself writing far more, you are transcribing, not minuting.
 
 The rule that matters more than any other: every point you record must carry a `quote` \
 copied EXACTLY from the transcript text you were given. Character for character. Do not \
@@ -307,5 +356,13 @@ class RawMinutes:
         )
 
 
-def extract_minutes(segments: list[dict], config: ModelConfig, effort: str = "high") -> RawMinutes:
-    return RawMinutes.from_json(_structured_call(segments, config, effort, MINUTES_PROMPT, MINUTES_SCHEMA))
+# Minutes default lower than notes, measured: at "high" a two-hour meeting's minutes took
+# ten minutes, and with a longer prompt thought past the 32,000-token cap without answering.
+# Lower effort thins the thinking, not the check -- every point must still resolve.
+MINUTES_EFFORT = "medium"
+
+
+def extract_minutes(segments: list[dict], config: ModelConfig,
+                    effort: str = MINUTES_EFFORT) -> tuple[RawMinutes, Usage]:
+    data, usage = _structured_call(segments, config, effort, MINUTES_PROMPT, MINUTES_SCHEMA)
+    return RawMinutes.from_json(data), usage

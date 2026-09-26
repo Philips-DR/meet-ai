@@ -189,7 +189,8 @@ def create_meet_ai_server(paths: ServerPaths, config: ModelConfig) -> MCPServer:
             read_only_hint=False, destructive_hint=False, open_world_hint=True
         ),
     )
-    def _generate_minutes(timeline: str, lexicon: str | None = None, effort: str = "high") -> dict:
+    def _generate_minutes(timeline: str, lexicon: str | None = None,
+                          effort: str | None = None) -> dict:
         try:
             return as_dict(
                 generate_minutes(
