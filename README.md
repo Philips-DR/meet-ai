@@ -128,6 +128,20 @@ actually spoken — never because of a speaker label.
 This step needs a timeline. Transcripts produced before timelines existed have none; re-run with
 `-f`.
 
+### Minutes
+
+```bash
+./notes transcripts/meeting.md --minutes     # formal minutes beside the transcript
+```
+
+The same rule, in the shape a secretary circulates: opening, each agenda item with what was
+discussed, resolved and actioned, then closing — past tense, third person. Every point must be
+found in the transcript or it is dropped, the meeting's own name included, and each line ends with
+the time in the recording where it can be heard (the quote itself is in `.minutes.json`). Items are
+put in the order the meeting took them. The date comes from the file name when it holds one
+(`20260812_102457.m4a`), and **attendance is left blank for the secretary** — a recording cannot
+show who was in the room, and a list inferred from voices would be the one invented part.
+
 ### Where the model comes from
 
 Bedrock by default, or the Anthropic API when `ANTHROPIC_API_KEY` is set — `--provider` forces
@@ -140,11 +154,15 @@ either. Credentials are passed in, never discovered: `--region`, `--profile`, `-
 ./mcp                            # MCP server on stdio
 ```
 
-Ten tools, the same operations the CLIs use: `list_recordings`, `preview_notes`,
-`generate_notes`, `transcribe`, `start_transcription`, `transcription_status`, and for recording
+Thirteen tools, the same operations the CLIs use: `list_recordings`, `read_transcript`,
+`preview_notes`, `generate_notes`, `preview_minutes`, `generate_minutes`, `transcribe`, `start_transcription`, `transcription_status`, and for recording
 `list_audio_sources`, `recording_status`, `start_recording`, `stop_recording`. Those that spend nothing are marked read-only so a caller can
 tell at a glance which are safe to run unattended; starting a recording is not, because it turns
 on a microphone.
+
+`read_transcript` hands a caller the transcript itself, as paragraphs stamped with their offset, so
+it can answer questions or draft from a meeting. That is a view, not the verified path: whatever a
+caller writes from it is not checked against the transcript. Notes and minutes are.
 
 Recording is a session — `start_recording` and `stop_recording` both return at once — so "record
 this meeting" works through the assistant without a chat turn blocking until the meeting ends.

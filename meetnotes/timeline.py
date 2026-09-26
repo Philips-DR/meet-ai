@@ -35,3 +35,13 @@ def load_timeline(path: Path) -> dict:
 def timeline_for(markdown_path: Path) -> Path:
     """The timeline that sits beside a given transcript. Mirrors transcribe.timeline_path."""
     return Path(markdown_path).with_suffix(".timeline.json")
+
+
+def resolve_timeline(target: Path) -> Path:
+    """Accept either a timeline or the transcript that sits beside one."""
+    target = Path(target)
+    if target.name.endswith(".timeline.json"):
+        return target
+    if target.suffix == ".md":
+        return timeline_for(target)
+    return target

@@ -1,4 +1,4 @@
-"""./notes -- turn a timeline into notes somebody will act on.
+"""./notes -- turn a timeline into notes somebody will act on, or minutes to circulate.
 
 The human front door. Consumes what ./transcribe produced; never decodes audio, never
 loads a Whisper model. Formats operations.py's results as prose; the MCP door formats the
@@ -13,17 +13,14 @@ import sys
 from pathlib import Path
 
 from meetnotes.client import BEDROCK, PROVIDERS, ModelConfig, resolve_provider
-from meetnotes.operations import OperationError, generate_notes, preview_notes
-from meetnotes.timeline import UnsupportedTimeline, timeline_for
-
-
-def resolve_timeline(target: Path) -> Path:
-    """Accept either a timeline or the transcript that sits beside one."""
-    if target.name.endswith(".timeline.json"):
-        return target
-    if target.suffix == ".md":
-        return timeline_for(target)
-    return target
+from meetnotes.operations import (
+    OperationError,
+    generate_minutes,
+    generate_notes,
+    preview_minutes,
+    preview_notes,
+)
+from meetnotes.timeline import UnsupportedTimeline, resolve_timeline
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -52,6 +49,9 @@ def build_parser() -> argparse.ArgumentParser:
                         choices=["low", "medium", "high", "max"],
                         help="How hard the model works on it. xhigh is omitted "
                              "deliberately: it arrived with Opus 4.7 and 400s on 4.6")
+    parser.add_argument("--minutes", action="store_true",
+                        help="Write formal minutes instead of notes: opening, each agenda "
+                             "item, closing, with attendance left for the secretary")
     parser.add_argument("-n", "--dry-run", action="store_true",
                         help="Show what would be sent and spend nothing. No model call, "
                              "no files written")
@@ -67,7 +67,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.dry_run:
-            preview = preview_notes(timeline_path, out_dir=out_dir, lexicon_path=lexicon)
+            preview = (preview_minutes if args.minutes else preview_notes)(
+                timeline_path, out_dir=out_dir, lexicon_path=lexicon)
             print(f"·  {Path(preview.timeline).name}")
             print(f"   {preview.segments} segments, {preview.words} words, "
                   f"~{preview.approx_tokens} tokens to send")
@@ -92,6 +93,18 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"→  {timeline_path.name}  ({provider}, {config.resolved_model}, "
               f"effort {args.effort})")
+
+        if args.minutes:
+            minutes = generate_minutes(
+                timeline_path, config, out_dir=out_dir, lexicon_path=lexicon, effort=args.effort
+            )
+            print(f"✓  {minutes.markdown}")
+            print(f"   {minutes.title}")
+            print(f"   {len(minutes.items)} agenda items, {minutes.verified_claims} verified points")
+            if minutes.dropped_claims:
+                print(f"   {minutes.dropped_claims} point(s) dropped — quote not found in "
+                      f"the transcript")
+            return 0
 
         result = generate_notes(
             timeline_path, config, out_dir=out_dir, lexicon_path=lexicon, effort=args.effort

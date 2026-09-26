@@ -56,9 +56,10 @@ def call(server, name, **arguments) -> dict:
 def test_the_door_advertises_exactly_its_operations(server):
     names = sorted(tool.name for tool in asyncio.run(server.list_tools()))
     assert names == [
-        "generate_notes", "list_audio_sources", "list_recordings", "preview_notes",
-        "recording_status", "start_recording", "start_transcription", "stop_recording",
-        "transcribe", "transcription_status",
+        "generate_minutes", "generate_notes", "list_audio_sources", "list_recordings",
+        "preview_minutes", "preview_notes", "read_transcript", "recording_status",
+        "start_recording", "start_transcription", "stop_recording", "transcribe",
+        "transcription_status",
     ]
 
 
@@ -71,7 +72,10 @@ def test_the_operations_that_spend_nothing_are_marked_read_only(server):
     assert read_only["list_recordings"] is True
     assert read_only["list_audio_sources"] is True
     assert read_only["recording_status"] is True
+    assert read_only["read_transcript"] is True
+    assert read_only["preview_minutes"] is True
     assert read_only["generate_notes"] is False
+    assert read_only["generate_minutes"] is False
     assert read_only["transcribe"] is False
     # Starting a recording turns on a microphone; it must pass through an approval gate.
     assert read_only["start_recording"] is False
@@ -148,3 +152,55 @@ def test_short_audio_passes_the_duration_gate(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="reached decode"):
         transcribe_audio(audio, tmp_path)
+
+
+def test_a_transcript_can_be_read_by_its_markdown_path(server, workspace):
+    """Callers hold the .md -- it is what list_recordings and people point at -- so the
+    read must not insist on the timeline's name."""
+    read = call(server, "read_transcript", transcript=str(workspace / "transcripts" / "meeting.md"))
+    assert read["text"].startswith("[00:00:00] Speaker 1: We should move billing")
+    assert "[00:00:04] Speaker 2: Kwame will send the contract" in read["text"]
+    assert read["truncated"] is False
+
+
+def test_a_transcript_can_be_read_in_part(server, workspace):
+    read = call(server, "read_transcript",
+                transcript=str(workspace / "transcripts" / "meeting.md"), start=5)
+    assert "billing" not in read["text"]
+    assert "Kwame" in read["text"]
+
+
+def test_minutes_preview_names_its_own_file(server, workspace):
+    preview = call(server, "preview_minutes", timeline=str(workspace / "transcripts" / "meeting.md"))
+    assert preview["would_write"].endswith("meeting.minutes.md")
+
+
+def test_a_long_read_stops_at_a_paragraph_and_says_where(server, workspace, monkeypatch):
+    """Half a meeting must never look like the whole of one."""
+    import meetnotes.operations as operations
+    monkeypatch.setattr(operations, "MAX_READ_CHARS", 60)
+    path = str(workspace / "transcripts" / "meeting.md")
+    first = call(server, "read_transcript", transcript=path)
+    assert first["truncated"] is True
+    assert first["end"] == 4.0
+    assert "Kwame" not in first["text"]
+    rest = call(server, "read_transcript", transcript=path, start=first["end"])
+    assert "Kwame" in rest["text"] and rest["truncated"] is False
+
+
+def test_minutes_are_reported_beside_their_transcript_never_as_one(server, workspace):
+    (workspace / "transcripts" / "meeting.minutes.md").write_text("# Minutes\n", encoding="utf-8")
+    listed = call(server, "list_recordings")
+    names = [Path(t["markdown"]).name for t in listed["transcripts"]]
+    assert "meeting.minutes.md" not in names
+    entry = next(t for t in listed["transcripts"] if t["markdown"].endswith("meeting.md"))
+    assert entry["minutes"].endswith("meeting.minutes.md")
+
+
+def test_a_meeting_can_be_named_the_way_a_person_names_it(server):
+    """"meeting" alone finds the transcript in the door's own directory -- found live: the
+    assistant's first read passed the bare name a person had typed, failed, and had to list
+    every recording to recover the path."""
+    read = call(server, "read_transcript", transcript="meeting")
+    assert "Kwame" in read["text"]
+    assert call(server, "preview_minutes", timeline="meeting")["segments"] == 2

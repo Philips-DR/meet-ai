@@ -68,6 +68,31 @@ and the next beginning `"department, like how..."` folded to `thisdepartment` an
 crossing the seam looked invented. Whisper splits on pauses, which land mid-phrase constantly, so
 this would have silently rejected legitimate claims in every recording.
 
+### Minutes, and the one unverified door
+
+**Minutes are notes held to the same rule in a different shape**, and share the model call
+(`extract._structured_call`), the span search and the verifier's `_verify_one`. Three things are
+minutes-specific:
+
+- **The meeting's name is a claim.** It survives only if the quote naming it resolves; otherwise the
+  title falls back to the date in the file name, or the file name. A confident wrong title is the
+  first thing a reader sees.
+- **Item order is arithmetic, not the model's.** Items are sorted by where their earliest evidence
+  sits in the recording, and an item left with no evidence is dropped whole, heading included.
+- **Attendance is never generated.** The rendered minutes leave "Present:" and "Apologies:" for the
+  secretary. Nothing in a recording shows who was in the room.
+
+Minutes lines carry a timestamp, not the quote — they are read aloud for adoption and the quote
+under every line would bury them. The quote is in `.minutes.json`. Headings are never numbered:
+`## 1. Medical claims` starts like a list item, which is exactly what docu-ai's residue lint flags.
+
+**`read_transcript` is the one door out of the verified path, on purpose.** It gives a caller the
+timeline as paragraphs, each stamped with its own offset, so a model can answer "what did they say
+about X". The timestamps are the timeline's, copied as they are — no model produces them — but
+whatever the caller writes from the text is unchecked. Its tool description says so and points at
+`generate_notes`/`generate_minutes` for anything to be circulated. A read always returns at least
+one paragraph: an empty page with `end == start` would loop a caller told to continue from `end`.
+
 ## Two front doors, one implementation
 
 `meetnotes/operations.py` holds what meet-ai can be asked to do, as data in and data out. `./notes`

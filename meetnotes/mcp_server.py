@@ -24,10 +24,13 @@ from meetnotes.operations import (
     MAX_SYNC_AUDIO_SECONDS,
     OperationError,
     as_dict,
+    generate_minutes,
     generate_notes,
     list_audio_sources,
     list_recordings,
+    preview_minutes,
     preview_notes,
+    read_transcript,
     recording_status,
     start_recording,
     start_transcription,
@@ -54,6 +57,17 @@ def _failed(error: Exception) -> dict:
 def create_meet_ai_server(paths: ServerPaths, config: ModelConfig) -> MCPServer:
     server = MCPServer(name="meet-ai", version=VERSION)
 
+    def locate(name: str) -> Path:
+        """A transcript as a caller names it: a full path, or just "20260812_102457" --
+        which is how a person names a meeting, and so how a model passes it on. A bare name
+        is looked for in the transcript directory this door was given, never elsewhere."""
+        path = Path(name)
+        if not path.is_absolute() and not path.exists():
+            path = paths.transcript_dir / path
+        if not path.suffix and not path.name.endswith(".timeline.json"):
+            path = path.with_name(f"{path.name}.timeline.json")
+        return path
+
     @server.tool(
         name="list_recordings",
         title="List audio and transcripts",
@@ -71,6 +85,31 @@ def create_meet_ai_server(paths: ServerPaths, config: ModelConfig) -> MCPServer:
             return _failed(error)
 
     @server.tool(
+        name="read_transcript",
+        title="Read a transcript",
+        description=(
+            "Return a transcript's text as paragraphs, each opening with its [hh:mm:ss] "
+            "offset into the recording. Pass a transcript .md or its .timeline.json; "
+            "optionally start and end, in seconds, to read part of it. A long transcript "
+            "comes back truncated=true with end set to where it stopped -- call again with "
+            "start=end for the rest. Use it to answer questions about a meeting or draft "
+            "something from it. What you write from it is NOT checked against the "
+            "transcript: for notes or minutes somebody will circulate, use generate_notes "
+            "or generate_minutes, which drop anything they cannot find verbatim. Reads only."
+        ),
+        annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+    )
+    def _read_transcript(transcript: str, start: float | None = None,
+                         end: float | None = None, lexicon: str | None = None) -> dict:
+        try:
+            return as_dict(read_transcript(
+                locate(transcript), start=start, end=end,
+                lexicon_path=Path(lexicon) if lexicon else None,
+            ))
+        except (OperationError, OSError, ValueError) as error:
+            return _failed(error)
+
+    @server.tool(
         name="preview_notes",
         title="Preview what would be sent for notes",
         description=(
@@ -83,7 +122,7 @@ def create_meet_ai_server(paths: ServerPaths, config: ModelConfig) -> MCPServer:
     def _preview_notes(timeline: str, lexicon: str | None = None) -> dict:
         try:
             return as_dict(
-                preview_notes(Path(timeline), lexicon_path=Path(lexicon) if lexicon else None)
+                preview_notes(locate(timeline), lexicon_path=Path(lexicon) if lexicon else None)
             )
         except (OperationError, OSError, ValueError) as error:
             return _failed(error)
@@ -106,10 +145,56 @@ def create_meet_ai_server(paths: ServerPaths, config: ModelConfig) -> MCPServer:
         try:
             return as_dict(
                 generate_notes(
-                    Path(timeline),
+                    locate(timeline),
                     config,
                     lexicon_path=Path(lexicon) if lexicon else None,
                     effort=effort,
+                )
+            )
+        except (OperationError, OSError, ValueError) as error:
+            return _failed(error)
+
+    @server.tool(
+        name="preview_minutes",
+        title="Preview what would be sent for minutes",
+        description=(
+            "Report the size of the transcript that would be sent to the model for minutes "
+            "and where they would be written, without calling a model or writing anything. "
+            "Costs nothing. Accepts a transcript .md or its .timeline.json."
+        ),
+        annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+    )
+    def _preview_minutes(timeline: str, lexicon: str | None = None) -> dict:
+        try:
+            return as_dict(
+                preview_minutes(locate(timeline), lexicon_path=Path(lexicon) if lexicon else None)
+            )
+        except (OperationError, OSError, ValueError) as error:
+            return _failed(error)
+
+    @server.tool(
+        name="generate_minutes",
+        title="Write formal meeting minutes",
+        description=(
+            "Write formal minutes of a meeting from its transcript: opening, each agenda item "
+            "with what was discussed, resolved and actioned, and closing, in the past-tense "
+            "third-person style of minutes. Every point must carry a quote found verbatim in "
+            "the transcript or it is dropped, and each line shows the time in the recording "
+            "where it can be heard. Attendance is left for the secretary to fill in, since a "
+            "recording cannot show who was present. Accepts a transcript .md or its "
+            ".timeline.json. Writes a markdown file (ready for docu-ai) and a JSON file, and "
+            "calls a model, which costs money."
+        ),
+        annotations=ToolAnnotations(
+            read_only_hint=False, destructive_hint=False, open_world_hint=True
+        ),
+    )
+    def _generate_minutes(timeline: str, lexicon: str | None = None, effort: str = "high") -> dict:
+        try:
+            return as_dict(
+                generate_minutes(
+                    locate(timeline), config,
+                    lexicon_path=Path(lexicon) if lexicon else None, effort=effort,
                 )
             )
         except (OperationError, OSError, ValueError) as error:

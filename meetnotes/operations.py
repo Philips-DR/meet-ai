@@ -20,9 +20,9 @@ from pathlib import Path
 
 from meetnotes.client import ModelConfig
 from meetnotes.lexicon import apply_lexicon, load_lexicon
-from meetnotes.render import write_notes
+from meetnotes.render import minutes_title, write_minutes, write_notes
 from meetnotes.spans import TimelineIndex
-from meetnotes.timeline import load_timeline, timeline_for
+from meetnotes.timeline import load_timeline, resolve_timeline, timeline_for
 
 # A synchronous transcription of a real meeting takes about as long as the meeting itself,
 # which no request/response protocol survives. The door refuses past this and says to use
@@ -44,6 +44,7 @@ class TranscriptEntry:
     markdown: str
     timeline: str | None
     notes: str | None
+    minutes: str | None = None
 
 
 @dataclass(frozen=True)
@@ -67,15 +68,18 @@ def list_recordings(audio_dir: Path, transcript_dir: Path) -> Recordings:
     transcripts: list[TranscriptEntry] = []
     if transcript_dir.is_dir():
         for md in sorted(transcript_dir.glob("*.md")):
-            if md.name.endswith(".notes.md"):
+            # What meet-ai writes from a transcript sits beside it; none of it is a transcript.
+            if md.name.endswith((".notes.md", ".minutes.md")):
                 continue
             timeline = timeline_for(md)
             notes = md.with_suffix("").with_suffix(".notes.md")
+            minutes = md.with_suffix("").with_suffix(".minutes.md")
             transcripts.append(
                 TranscriptEntry(
                     markdown=str(md),
                     timeline=str(timeline) if timeline.exists() else None,
                     notes=str(notes) if notes.exists() else None,
+                    minutes=str(minutes) if minutes.exists() else None,
                 )
             )
 
@@ -126,6 +130,7 @@ def preview_notes(timeline_path: Path, out_dir: Path | None = None,
     """
     from meetnotes.extract import transcript_for_model
 
+    timeline_path = resolve_timeline(timeline_path)
     timeline, segments, corrections = _load_segments(timeline_path, lexicon_path)
     prompt = transcript_for_model(segments)
     source = timeline.get("source", timeline_path.stem)
@@ -162,6 +167,7 @@ def generate_notes(timeline_path: Path, config: ModelConfig, out_dir: Path | Non
     from meetnotes.extract import extract_notes
     from meetnotes.verify import verify
 
+    timeline_path = resolve_timeline(timeline_path)
     timeline, segments, _ = _load_segments(timeline_path, lexicon_path)
     source = timeline.get("source", timeline_path.stem)
     duration = float(timeline.get("duration", 0.0))
@@ -188,6 +194,145 @@ def generate_notes(timeline_path: Path, config: ModelConfig, out_dir: Path | Non
         actions=len(notes.actions),
         questions=len(notes.questions),
         model=config.resolved_model,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Minutes
+# ---------------------------------------------------------------------------
+
+def preview_minutes(timeline_path: Path, out_dir: Path | None = None,
+                    lexicon_path: Path | None = None) -> NotesPreview:
+    """preview_notes for minutes: the same transcript goes to the model, to a different file."""
+    preview = preview_notes(timeline_path, out_dir, lexicon_path)
+    target = Path(preview.would_write).with_name(
+        Path(preview.would_write).name.replace(".notes.md", ".minutes.md"))
+    return NotesPreview(**{**asdict(preview), "would_write": str(target)})
+
+
+@dataclass(frozen=True)
+class MinutesResult:
+    markdown: str
+    json: str
+    title: str
+    items: list[str]
+    verified_claims: int
+    dropped_claims: int
+    model: str
+
+
+def generate_minutes(timeline_path: Path, config: ModelConfig, out_dir: Path | None = None,
+                     lexicon_path: Path | None = None, effort: str = "high") -> MinutesResult:
+    """Formal minutes, held to the notes' rule: every point must be found in the transcript."""
+    from meetnotes.extract import extract_minutes
+    from meetnotes.verify import verify_minutes
+
+    timeline_path = resolve_timeline(timeline_path)
+    timeline, segments, _ = _load_segments(timeline_path, lexicon_path)
+    source = timeline.get("source", timeline_path.stem)
+    duration = float(timeline.get("duration", 0.0))
+
+    raw = extract_minutes(segments, config, effort=effort)
+    minutes = verify_minutes(raw, TimelineIndex(segments))
+
+    target_dir = out_dir or timeline_path.parent
+    md_path, json_path = write_minutes(
+        target_dir / f"{Path(source).stem}.minutes.md", minutes, source, duration)
+
+    return MinutesResult(
+        markdown=str(md_path),
+        json=str(json_path),
+        title=minutes_title(minutes, source),
+        items=[item.heading for item in minutes.items],
+        verified_claims=minutes.claim_count,
+        dropped_claims=len(minutes.dropped),
+        model=config.resolved_model,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Reading a transcript
+# ---------------------------------------------------------------------------
+
+# A new paragraph starts when the speaker changes, or after this much audio, so a caller
+# can place a line in time without a timestamp on every segment.
+PARAGRAPH_SECONDS = 60.0
+# A two-hour meeting renders to about 90k characters. The cap exists for the six-hour
+# recording, where one unpaged read would crowd out everything else a caller holds.
+MAX_READ_CHARS = 200_000
+
+
+@dataclass(frozen=True)
+class TranscriptText:
+    timeline: str
+    source: str
+    duration: float
+    start: float
+    end: float
+    segments: int
+    truncated: bool
+    text: str
+
+
+def _paragraphs(segments: list[dict]) -> list[tuple[float, str]]:
+    """Group segments into (start, text) paragraphs, each opening with its timestamp."""
+    from transcribe import hhmmss
+
+    grouped: list[tuple[float, object, list[str]]] = []
+    for segment in segments:
+        start = float(segment.get("start", 0.0))
+        speaker = segment.get("speaker")
+        if not grouped or speaker != grouped[-1][1] or start - grouped[-1][0] >= PARAGRAPH_SECONDS:
+            grouped.append((start, speaker, []))
+        grouped[-1][2].append(str(segment.get("text", "")))
+
+    out: list[tuple[float, str]] = []
+    for start, speaker, texts in grouped:
+        label = f" Speaker {speaker + 1}:" if isinstance(speaker, int) else ""
+        out.append((start, " ".join(f"[{hhmmss(start)}]{label} {' '.join(texts)}".split())))
+    return out
+
+
+def read_transcript(path: Path, start: float | None = None, end: float | None = None,
+                    lexicon_path: Path | None = None) -> TranscriptText:
+    """The transcript as timestamped paragraphs, whole or between two offsets in seconds.
+
+    A VIEW for a caller to read and answer questions from -- not the verified path. The
+    timestamps are the timeline's own, copied as they are, but whatever a caller writes
+    from this text is not checked against the transcript the way notes and minutes are.
+    """
+    timeline_path = resolve_timeline(path)
+    timeline, segments, _ = _load_segments(timeline_path, lexicon_path)
+    lower = start or 0.0
+    upper = end if end is not None else float("inf")
+    if upper <= lower:
+        raise OperationError(f"end ({end}) must be after start ({lower}).")
+    chosen = [s for s in segments
+              if float(s.get("end", 0.0)) > lower and float(s.get("start", 0.0)) < upper]
+
+    kept: list[str] = []
+    size, truncated = 0, False
+    reached = float(chosen[-1]["end"]) if chosen else lower
+    for opened_at, paragraph in _paragraphs(chosen):
+        # Always return at least one paragraph: an empty page with end == start would send
+        # a caller told to "call again with start=end" round in a loop forever.
+        if kept and size + len(paragraph) > MAX_READ_CHARS:
+            # Stop at a paragraph boundary and say where, so the caller can ask for the rest
+            # with start=end rather than silently receiving half a meeting.
+            truncated, reached = True, opened_at
+            break
+        kept.append(paragraph)
+        size += len(paragraph) + 2
+
+    return TranscriptText(
+        timeline=str(timeline_path),
+        source=str(timeline.get("source", timeline_path.stem)),
+        duration=float(timeline.get("duration", 0.0)),
+        start=lower,
+        end=reached,
+        segments=len(chosen),
+        truncated=truncated,
+        text="\n\n".join(kept),
     )
 
 

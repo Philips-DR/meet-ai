@@ -147,8 +147,10 @@ def transcript_for_model(segments: list[dict]) -> str:
     return "\n".join(lines).strip()
 
 
-def extract_notes(segments: list[dict], config: ModelConfig, effort: str = "high") -> RawNotes:
-    """One model call over the whole transcript. Streamed, because it is a long one."""
+def _structured_call(segments: list[dict], config: ModelConfig, effort: str,
+                     system: str, schema: dict) -> dict:
+    """One model call over the whole transcript, answered in `schema`. Streamed, because
+    it is a long one."""
     import json
 
     client = build_client(config)
@@ -157,15 +159,153 @@ def extract_notes(segments: list[dict], config: ModelConfig, effort: str = "high
     with client.messages.stream(
         model=config.resolved_model,
         max_tokens=MAX_TOKENS,
-        system=SYSTEM_PROMPT,
+        system=system,
         # Explicit, not omitted: on Opus 4.6 leaving `thinking` out means no thinking at
         # all. (On Opus 5 it defaults to adaptive, so this line is harmless there too.)
         thinking={"type": "adaptive"},
-        output_config={"effort": effort, "format": {"type": "json_schema", "schema": NOTES_SCHEMA}},
+        output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}},
         messages=[{"role": "user", "content": f"<transcript>\n{transcript}\n</transcript>"}],
     ) as stream:
         message = stream.get_final_message()
 
     # output_config.format guarantees the first text block is valid JSON of this shape.
     text = next(block.text for block in message.content if block.type == "text")
-    return RawNotes.from_json(json.loads(text))
+    return json.loads(text)
+
+
+def extract_notes(segments: list[dict], config: ModelConfig, effort: str = "high") -> RawNotes:
+    return RawNotes.from_json(_structured_call(segments, config, effort, SYSTEM_PROMPT, NOTES_SCHEMA))
+
+
+# ---------------------------------------------------------------------------
+# Minutes -- the same contract, in the shape a secretary circulates
+# ---------------------------------------------------------------------------
+
+def _claims(description: str, with_owner: bool = False) -> dict:
+    properties = dict(_CLAIM_PROPERTIES)
+    required = ["text", "quote"]
+    if with_owner:
+        properties["owner"] = NOTES_SCHEMA["properties"]["actions"]["items"]["properties"]["owner"]
+        required.append("owner")
+    return {
+        "type": "array",
+        "description": description,
+        "items": {
+            "type": "object",
+            "properties": properties,
+            "required": required,
+            "additionalProperties": False,
+        },
+    }
+
+
+MINUTES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "meeting": {
+            "type": "string",
+            "description": (
+                "Which meeting this was, as the transcript itself names it, phrased to "
+                "follow the words 'Minutes of the' -- e.g. 'third quarter meeting of the "
+                "Retirees Association, Tema branch'. Empty string if it is never stated."
+            ),
+        },
+        "meeting_quote": {
+            "type": "string",
+            "description": (
+                "An exact quote from the transcript that names the meeting. Empty string "
+                "when `meeting` is empty."
+            ),
+        },
+        "opening": _claims(
+            "How the meeting opened: prayers, a minute's silence, announcements, the "
+            "chair's welcome. In the order they happened."
+        ),
+        "items": {
+            "type": "array",
+            "description": "The agenda items taken, in the order they were taken.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "heading": {
+                        "type": "string",
+                        "description": (
+                            "A short agenda-style heading, e.g. 'Minutes of the previous "
+                            "meeting', 'Medical claims', 'Any other business'. No numbering."
+                        ),
+                    },
+                    "discussion": _claims(
+                        "What was reported, raised or discussed under this item, in formal "
+                        "minutes style: past tense, third person."
+                    ),
+                    "resolutions": _claims(
+                        "What was resolved, agreed or accepted. Name who moved or seconded "
+                        "only if that name is spoken in the transcript."
+                    ),
+                    "actions": _claims("What somebody is to do as a result.", with_owner=True),
+                },
+                "required": ["heading", "discussion", "resolutions", "actions"],
+                "additionalProperties": False,
+            },
+        },
+        "closing": _claims("How the meeting closed: date of the next meeting, closing prayer."),
+    },
+    "required": ["meeting", "meeting_quote", "opening", "items", "closing"],
+    "additionalProperties": False,
+}
+
+MINUTES_PROMPT = """\
+You are the secretary, writing the formal minutes of a real meeting from its transcript. \
+The minutes will be circulated to members and read back for adoption at the next meeting, \
+so they must be accurate above all else.
+
+Write in the register of minutes: past tense, third person, plain and formal -- "The \
+Chairman informed members that...", "Members were reminded to...", "It was agreed that...". \
+Group what was said under the agenda items the meeting actually took, in the order it took \
+them. Vendor presentations, announcements and any other business are items too.
+
+The rule that matters more than any other: every point you record must carry a `quote` \
+copied EXACTLY from the transcript text you were given. Character for character. Do not \
+paraphrase inside the quote, do not join separate pieces of speech into one quote, do not \
+fix grammar, and do not add punctuation that is not there. Any point whose quote does not \
+appear verbatim in the transcript is discarded automatically before anyone reads it, so a \
+short exact quote is worth more than a long tidied one.
+
+Names: write a person's name only when it is spoken in the transcript. Speaker labels come \
+from automatic voice clustering and are frequently wrong -- never use one to decide who said \
+something, who moved a motion or who owns an action. When the transcript does not say who, \
+write "a member" or leave the owner empty. Nobody's attendance can be known from a \
+recording; do not list who was present.
+
+Transcription errors: the transcript was produced by speech recognition and mishears names \
+and places. In your own `text` you may correct an obvious mishearing when the correct form \
+is certain from context, but a `quote` is always copied exactly as the transcript has it.
+
+Record only what actually happened. An item where nothing was resolved has an empty \
+resolutions list; do not invent a resolution to fill it.\
+"""
+
+
+@dataclass(frozen=True)
+class RawMinutes:
+    """What the model returned for minutes, before any of it has been verified."""
+
+    meeting: str
+    meeting_quote: str
+    opening: list[dict]
+    items: list[dict]
+    closing: list[dict]
+
+    @classmethod
+    def from_json(cls, data: dict) -> "RawMinutes":
+        return cls(
+            meeting=str(data.get("meeting", "")),
+            meeting_quote=str(data.get("meeting_quote", "")),
+            opening=list(data.get("opening", [])),
+            items=list(data.get("items", [])),
+            closing=list(data.get("closing", [])),
+        )
+
+
+def extract_minutes(segments: list[dict], config: ModelConfig, effort: str = "high") -> RawMinutes:
+    return RawMinutes.from_json(_structured_call(segments, config, effort, MINUTES_PROMPT, MINUTES_SCHEMA))
