@@ -140,17 +140,22 @@ either. Credentials are passed in, never discovered: `--region`, `--profile`, `-
 ./mcp                            # MCP server on stdio
 ```
 
-Eight tools, the same operations the CLIs use: `list_recordings`, `preview_notes`,
-`generate_notes`, `transcribe`, and for recording `list_audio_sources`, `recording_status`,
-`start_recording`, `stop_recording`. Those that spend nothing are marked read-only so a caller can
+Ten tools, the same operations the CLIs use: `list_recordings`, `preview_notes`,
+`generate_notes`, `transcribe`, `start_transcription`, `transcription_status`, and for recording
+`list_audio_sources`, `recording_status`, `start_recording`, `stop_recording`. Those that spend nothing are marked read-only so a caller can
 tell at a glance which are safe to run unattended; starting a recording is not, because it turns
 on a microphone.
 
 Recording is a session — `start_recording` and `stop_recording` both return at once — so "record
 this meeting" works through the assistant without a chat turn blocking until the meeting ends.
 
-`transcribe` is capped at 15 minutes of audio — decoding takes roughly as long as the recording, so
-longer files are for `./transcribe` in a terminal. Paths and credentials are injected:
+**Transcribing a real meeting runs as a background job.** `start_transcription` returns a job id at
+once and `transcription_status` reports the phase, percent and time left, then the transcript and
+timeline paths when it's done — so a whole meeting goes record → transcribe → notes → Doc through
+the assistant with nothing blocking. One job at a time; a decode already uses every core. An
+interrupted job (killed, or the machine slept) can be started again and resumes long files from
+their last finished chunk. The synchronous `transcribe` tool stays for clips under 15 minutes,
+because it returns the result in a single call. Paths and credentials are injected:
 `MEET_AI_AUDIO`, `MEET_AI_TRANSCRIPTS`, `MEET_AI_PROVIDER`, `MEET_AI_MODEL`.
 
 ## Setup

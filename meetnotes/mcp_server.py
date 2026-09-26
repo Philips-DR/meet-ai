@@ -30,8 +30,10 @@ from meetnotes.operations import (
     preview_notes,
     recording_status,
     start_recording,
+    start_transcription,
     stop_recording,
     transcribe_audio,
+    transcription_status,
 )
 
 VERSION = "0.1.0"
@@ -119,9 +121,8 @@ def create_meet_ai_server(paths: ServerPaths, config: ModelConfig) -> MCPServer:
         description=(
             "Decode one audio file into a transcript and a timeline, optionally labelling "
             f"speakers. Runs on this machine with no audio leaving it. Capped at "
-            f"{MAX_SYNC_AUDIO_SECONDS // 60} minutes of audio: decoding takes roughly as "
-            "long as the recording, so anything longer must be run from a terminal with "
-            "./transcribe instead."
+            f"{MAX_SYNC_AUDIO_SECONDS // 60} minutes of audio and returns the result in one "
+            "call. For anything longer -- any real meeting -- use start_transcription."
         ),
         annotations=ToolAnnotations(
             read_only_hint=False, destructive_hint=False, open_world_hint=False
@@ -208,8 +209,7 @@ def create_meet_ai_server(paths: ServerPaths, config: ModelConfig) -> MCPServer:
         description=(
             "End the running recording and write it as lossless FLAC, warning if it came "
             "out silent. Also recovers an interrupted session from what reached disk. "
-            "Returns the audio path, ready for transcription -- though recordings longer "
-            f"than {MAX_SYNC_AUDIO_SECONDS // 60} minutes must be transcribed from a terminal."
+            "Returns the audio path, ready to hand to start_transcription."
         ),
         annotations=ToolAnnotations(
             read_only_hint=False, destructive_hint=False, open_world_hint=False
@@ -218,6 +218,50 @@ def create_meet_ai_server(paths: ServerPaths, config: ModelConfig) -> MCPServer:
     def _stop_recording(session_id: str | None = None) -> dict:
         try:
             return stop_recording(paths.audio_dir, session_id)
+        except OperationError as error:
+            return _failed(error)
+
+    @server.tool(
+        name="start_transcription",
+        title="Transcribe a recording in the background",
+        description=(
+            "Start transcribing an audio file of any length and return at once with a job "
+            "id. The decode runs in the background -- roughly half the recording's length, "
+            "about double that with speaker labels -- and nothing waits on it. Check on it "
+            "with transcription_status; when it is done, the timeline it reports can go "
+            "straight to preview_notes and generate_notes. For speaker labels pass diarize "
+            "and the real number of people present: auto-detection over-splits badly. One "
+            "job runs at a time."
+        ),
+        annotations=ToolAnnotations(
+            read_only_hint=False, destructive_hint=False, open_world_hint=False
+        ),
+    )
+    def _start_transcription(audio: str, diarize: bool = False, speakers: int = 0,
+                             language: str | None = None, vocabulary: str | None = None,
+                             force: bool = False) -> dict:
+        try:
+            return start_transcription(Path(audio), paths.transcript_dir, diarize=diarize,
+                                       speakers=speakers, language=language,
+                                       vocabulary=vocabulary, force=force)
+        except OperationError as error:
+            return _failed(error)
+
+    @server.tool(
+        name="transcription_status",
+        title="How is a transcription getting on?",
+        description=(
+            "State of a transcription job -- running, done, failed, or interrupted -- with "
+            "its phase, percent and time remaining while it runs, and the transcript and "
+            "timeline paths once it is done. Pass a job id, or omit it for the most recent. "
+            "An interrupted job can be started again and resumes where it stopped for long "
+            "files. Reads only."
+        ),
+        annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+    )
+    def _transcription_status(job_id: str | None = None) -> dict:
+        try:
+            return {"job": transcription_status(paths.transcript_dir, job_id)}
         except OperationError as error:
             return _failed(error)
 

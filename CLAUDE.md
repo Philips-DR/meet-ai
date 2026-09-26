@@ -82,9 +82,8 @@ about who is reading, and they drift the moment either changes for its own audie
 - **`preview_notes` spends nothing and needs no credentials.** It is the approval surface, annotated
   `readOnlyHint` so a caller can tell at a glance which tools are safe to run unattended.
 - **Synchronous transcription does not fit request/response.** Decoding takes roughly as long as the
-  recording, so the MCP door caps audio at `MAX_SYNC_AUDIO_SECONDS` and refuses past it, pointing at
-  `./transcribe`. Lifting the cap means a background job with a status operation — a feature, not a
-  bigger number.
+  recording, so the synchronous tool caps audio at `MAX_SYNC_AUDIO_SECONDS`, and anything longer goes
+  through a job (`jobs.py`) that returns at once and is polled. See "Transcription jobs" below.
 - **Paths and credentials are injected.** `ServerPaths` carries the directories; `ModelConfig`
   carries the provider, model, region, profile and key. A tool that discovers either cannot be
   pointed at a second user's data without a rewrite.
@@ -147,6 +146,28 @@ lets the assistant say "record this meeting". It needed no job machinery — tra
   encode so a long recording is read once.
 - **Capture does not improve accuracy** for a single microphone in a room. Say so wherever it is
   described, because the natural assumption is that it would.
+
+## Transcription jobs
+
+The job was deferred until something needed it, and `stop_recording` handing its audio straight to
+transcription was that something. Before it, "record this meeting and write it up" broke at step two
+for every real meeting.
+
+- **Same shape as a recording session, on purpose:** a detached process nobody waits on, state on
+  disk, a pid checked against `/proc` before anyone trusts it. Two mechanisms that look alike are
+  easier to reason about than one clever one and one plain one.
+- **Progress comes from the process's own log**, not a separate channel. Its lines are written with
+  carriage returns, so the log is one long run of overwritten updates — the *last* match is current.
+  Diarization is reported as its own phase, because a job at "100%" of decoding is only half done
+  if speakers were asked for.
+- **Interrupted is not failed.** A transcriber that vanished without finishing or erroring was
+  killed or slept, and restarting resumes long files from their last chunk. Reporting it as a
+  failure would send someone hunting for a bug that is not there.
+- **One job at a time.** A decode already pins every core; a second halves both and finishes
+  neither sooner.
+- **`start` waits two seconds before returning**, to catch a transcriber that dies at once — a bad
+  argument, a missing dependency — rather than hand back an id for a job already dead.
+- Every job pays ~15–20 s to load the model before any audio is decoded. Fixed cost, not progress.
 
 ## Diarization — what it is honestly worth
 

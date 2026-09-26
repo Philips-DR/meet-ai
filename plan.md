@@ -34,6 +34,7 @@ assistant decides when to call either. Neither tool knows the other's internals.
 | M3b | Layer 1: two-channel capture for calls | Not started |
 | M4 | Notes that carry spans, and the lint | Done |
 | M5 | MCP front door beside the CLI | Done |
+| M6 | Transcription as a background job | Done — removes the 15-minute limit for real meetings |
 
 ### M3b, what is left of layer 1
 
@@ -54,9 +55,6 @@ more valuable next step for the recordings this tool is actually used on.
 
 - **Recording on the MCP door as a blocking call.** It is a session instead; see CLAUDE.md.
 
-- **A background job runner.** The MCP door caps synchronous transcription at fifteen minutes of
-  audio and points longer files at the CLI. Lifting that cap means a job with a status operation,
-  which is a feature rather than a bigger number.
 - **Hosted diarization.** It would likely fix attribution, at the cost of sending client audio off
   the machine. That trade is not obviously right, and it is the one open question that changes what
   a span is allowed to claim.

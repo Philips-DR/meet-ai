@@ -230,8 +230,8 @@ def transcribe_audio(audio_path: Path, out_dir: Path, diarize: bool = False,
         raise OperationError(
             f"{audio_path.name} is {duration / 60:.0f} minutes, past the "
             f"{max_seconds / 60:.0f}-minute cap for a synchronous call. Decoding takes "
-            f"roughly as long as the recording, which no request survives. Run "
-            f"./transcribe on it from a terminal instead."
+            f"roughly as long as the recording, which no request survives. Use "
+            f"start_transcription instead: it returns at once and runs in the background."
         )
 
     argv = [str(audio_path), "-o", str(out_dir)]
@@ -330,3 +330,34 @@ def stop_recording(audio_dir: Path, session_id: str | None = None) -> dict:
         return asdict(capture.stop(audio_dir, session_id))
     except capture.CaptureError as error:
         raise OperationError(str(error)) from error
+
+
+# ---------------------------------------------------------------------------
+# Transcription jobs
+# ---------------------------------------------------------------------------
+#
+# The synchronous transcribe_audio above stays for short clips, because it hands back the
+# result in one call. Anything longer goes through a job: started at once, polled for
+# progress, no cap -- the decode runs as long as it needs while nothing waits on it.
+
+def start_transcription(audio_path: Path, out_dir: Path, diarize: bool = False,
+                        speakers: int = 0, language: str | None = None,
+                        vocabulary: str | None = None, force: bool = False) -> dict:
+    import jobs
+
+    try:
+        return asdict(jobs.start(audio_path, out_dir, diarize=diarize, speakers=speakers,
+                                 language=language, vocabulary=vocabulary, force=force))
+    except jobs.JobError as error:
+        raise OperationError(str(error)) from error
+
+
+def transcription_status(out_dir: Path, job_id: str | None = None) -> dict | None:
+    """One job by id, or the most recent. Refreshed from its process and its log."""
+    import jobs
+
+    try:
+        job = jobs.get(out_dir, job_id) if job_id else jobs.latest(out_dir)
+    except jobs.JobError as error:
+        raise OperationError(str(error)) from error
+    return asdict(job) if job else None

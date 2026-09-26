@@ -57,7 +57,8 @@ def test_the_door_advertises_exactly_its_operations(server):
     names = sorted(tool.name for tool in asyncio.run(server.list_tools()))
     assert names == [
         "generate_notes", "list_audio_sources", "list_recordings", "preview_notes",
-        "recording_status", "start_recording", "stop_recording", "transcribe",
+        "recording_status", "start_recording", "start_transcription", "stop_recording",
+        "transcribe", "transcription_status",
     ]
 
 
@@ -129,7 +130,8 @@ def test_long_audio_is_refused_before_anything_is_decoded(tmp_path, monkeypatch)
 
     with pytest.raises(OperationError) as excinfo:
         transcribe_audio(audio, tmp_path)
-    assert "./transcribe" in str(excinfo.value)
+    # It used to send you to a terminal. Now there is somewhere better to go.
+    assert "start_transcription" in str(excinfo.value)
 
 
 def test_short_audio_passes_the_duration_gate(tmp_path, monkeypatch):
