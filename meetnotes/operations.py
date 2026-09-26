@@ -20,7 +20,7 @@ from pathlib import Path
 
 from meetnotes.client import ModelConfig
 from meetnotes.lexicon import apply_lexicon, load_lexicon
-from meetnotes.render import minutes_title, write_minutes, write_notes
+from meetnotes.render import minutes_title, notes_title, write_minutes, write_notes
 from meetnotes.spans import TimelineIndex
 from meetnotes.timeline import load_timeline, resolve_timeline, timeline_for
 
@@ -152,6 +152,7 @@ def preview_notes(timeline_path: Path, out_dir: Path | None = None,
 class NotesResult:
     markdown: str
     json: str
+    title: str
     summary: str
     verified_claims: int
     dropped_claims: int
@@ -185,7 +186,7 @@ def generate_notes(timeline_path: Path, config: ModelConfig, out_dir: Path | Non
     md_path, json_path = write_notes(
         target_dir / f"{Path(source).stem}.notes.md",
         notes,
-        f"{Path(source).stem} — notes",
+        notes_title(notes, source),
         source,
         duration,
     )
@@ -193,6 +194,7 @@ def generate_notes(timeline_path: Path, config: ModelConfig, out_dir: Path | Non
     return NotesResult(
         markdown=str(md_path),
         json=str(json_path),
+        title=notes_title(notes, source),
         summary=notes.summary,
         verified_claims=notes.claim_count,
         dropped_claims=len(notes.dropped),

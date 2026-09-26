@@ -192,3 +192,22 @@ def test_the_json_sits_beside_the_markdown_without_doubling_the_suffix(tmp_path)
     )
     assert md_path.name == "slice.notes.md"
     assert json_path.name == "slice.notes.json"
+
+
+def test_notes_are_titled_by_the_meeting_when_the_transcript_names_it():
+    """Found on the first real run: every notes document opened '20260812_102457 — notes'."""
+    from meetnotes.render import notes_title
+    raw = RawNotes(summary="", decisions=[], actions=[], questions=[],
+                   meeting="billing review", meeting_quote="move billing to the new provider")
+    notes = verify(raw, INDEX)
+    assert notes_title(notes, "20260812_102457.m4a") == "Notes of the billing review"
+
+
+def test_an_unsupported_meeting_name_falls_back_to_the_recording_date():
+    from meetnotes.render import notes_title
+    raw = RawNotes(summary="", decisions=[], actions=[], questions=[],
+                   meeting="annual general meeting", meeting_quote="welcome to the AGM")
+    notes = verify(raw, INDEX)
+    assert notes.meeting == ""
+    assert notes.dropped == [{"kind": "meeting", "text": "annual general meeting", "quote": "welcome to the AGM"}]
+    assert notes_title(notes, "20260812_102457.m4a") == "Notes of the meeting of 12 August 2026"

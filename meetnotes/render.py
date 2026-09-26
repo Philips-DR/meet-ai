@@ -96,6 +96,8 @@ def write_notes(out_path: Path, notes: VerifiedNotes, title: str, source: str,
             {
                 "version": NOTES_VERSION,
                 "source": source,
+                "title": title,
+                "meeting": notes.meeting,
                 "summary": notes.summary,
                 "decisions": [_claim_json(c) for c in notes.decisions],
                 "actions": [_claim_json(c) for c in notes.actions],
@@ -131,11 +133,21 @@ def recorded_at(source: str) -> dt.datetime | None:
         return None
 
 
-def minutes_title(minutes: VerifiedMinutes, source: str) -> str:
-    if minutes.meeting:
-        return f"Minutes of the {minutes.meeting}"
+def _titled(kind: str, meeting: str, source: str) -> str:
+    """"Minutes of the third quarter meeting of ...", falling back to the recording's date,
+    then its file name. Never a bare file stem when anything better is known."""
+    if meeting:
+        return f"{kind} of the {meeting}"
     when = recorded_at(source)
-    return f"Minutes of the meeting of {when:%-d %B %Y}" if when else f"Minutes — {Path(source).stem}"
+    return f"{kind} of the meeting of {when:%-d %B %Y}" if when else f"{kind} — {Path(source).stem}"
+
+
+def minutes_title(minutes: VerifiedMinutes, source: str) -> str:
+    return _titled("Minutes", minutes.meeting, source)
+
+
+def notes_title(notes: VerifiedNotes, source: str) -> str:
+    return _titled("Notes", notes.meeting, source)
 
 
 def _minute_line(claim: VerifiedClaim) -> str:

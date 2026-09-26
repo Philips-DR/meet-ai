@@ -36,9 +36,28 @@ _CLAIM_PROPERTIES = {
 # Written out rather than generated from a Pydantic model: structured outputs want one
 # flat schema with no $ref indirection, and an explicit schema is also the thing a reviewer
 # can actually read.
+_MEETING_PROPERTIES = {
+    "meeting": {
+        "type": "string",
+        "description": (
+            "Which meeting this was, as the transcript itself names it, phrased to follow "
+            "the words 'Minutes of the' -- e.g. 'third quarter meeting of the Retirees "
+            "Association, Tema branch'. Empty string if it is never stated."
+        ),
+    },
+    "meeting_quote": {
+        "type": "string",
+        "description": (
+            "An exact quote from the transcript that names the meeting. Empty string when "
+            "`meeting` is empty."
+        ),
+    },
+}
+
 NOTES_SCHEMA = {
     "type": "object",
     "properties": {
+        **_MEETING_PROPERTIES,
         "summary": {
             "type": "string",
             "description": "What this meeting was about and what came of it. A short paragraph.",
@@ -81,7 +100,7 @@ NOTES_SCHEMA = {
             },
         },
     },
-    "required": ["summary", "decisions", "actions", "questions"],
+    "required": ["meeting", "meeting_quote", "summary", "decisions", "actions", "questions"],
     "additionalProperties": False,
 }
 
@@ -118,10 +137,14 @@ class RawNotes:
     decisions: list[dict]
     actions: list[dict]
     questions: list[dict]
+    meeting: str = ""
+    meeting_quote: str = ""
 
     @classmethod
     def from_json(cls, data: dict) -> "RawNotes":
         return cls(
+            meeting=str(data.get("meeting", "")),
+            meeting_quote=str(data.get("meeting_quote", "")),
             summary=str(data.get("summary", "")),
             decisions=list(data.get("decisions", [])),
             actions=list(data.get("actions", [])),
@@ -232,21 +255,7 @@ def _claims(description: str, with_owner: bool = False) -> dict:
 MINUTES_SCHEMA = {
     "type": "object",
     "properties": {
-        "meeting": {
-            "type": "string",
-            "description": (
-                "Which meeting this was, as the transcript itself names it, phrased to "
-                "follow the words 'Minutes of the' -- e.g. 'third quarter meeting of the "
-                "Retirees Association, Tema branch'. Empty string if it is never stated."
-            ),
-        },
-        "meeting_quote": {
-            "type": "string",
-            "description": (
-                "An exact quote from the transcript that names the meeting. Empty string "
-                "when `meeting` is empty."
-            ),
-        },
+        **_MEETING_PROPERTIES,
         "opening": _claims(
             "How the meeting opened: prayers, a minute's silence, announcements, the "
             "chair's welcome. In the order they happened."

@@ -27,6 +27,7 @@ class VerifiedClaim:
 @dataclass
 class VerifiedNotes:
     summary: str
+    meeting: str = ""
     decisions: list[VerifiedClaim] = field(default_factory=list)
     actions: list[VerifiedClaim] = field(default_factory=list)
     questions: list[VerifiedClaim] = field(default_factory=list)
@@ -49,9 +50,21 @@ def _verify_one(claim: dict, index: TimelineIndex) -> VerifiedClaim | None:
     )
 
 
+def _meeting(name: str, quote: str, index: TimelineIndex, dropped: list[dict]) -> str:
+    """The meeting's name is a claim like any other: kept only if the quote naming it
+    resolves. A confident wrong title is the first thing a reader sees."""
+    if not name.strip():
+        return ""
+    if index.find(quote) is not None:
+        return name.strip()
+    dropped.append({"kind": "meeting", "text": name, "quote": quote})
+    return ""
+
+
 def verify(raw: RawNotes, index: TimelineIndex) -> VerifiedNotes:
     """Keep the claims the transcript actually supports; record the rest as dropped."""
     notes = VerifiedNotes(summary=raw.summary.strip())
+    notes.meeting = _meeting(raw.meeting, raw.meeting_quote, index, notes.dropped)
 
     for kind, claims in (
         ("decision", raw.decisions),
@@ -124,10 +137,7 @@ def verify_minutes(raw: RawMinutes, index: TimelineIndex) -> VerifiedMinutes:
     order; an item left with no evidence at all is dropped whole, heading included.
     """
     minutes = VerifiedMinutes(meeting="")
-    if raw.meeting.strip() and index.find(raw.meeting_quote) is not None:
-        minutes.meeting = raw.meeting.strip()
-    elif raw.meeting.strip():
-        minutes.dropped.append({"kind": "meeting", "text": raw.meeting, "quote": raw.meeting_quote})
+    minutes.meeting = _meeting(raw.meeting, raw.meeting_quote, index, minutes.dropped)
 
     minutes.opening = _keep(raw.opening, "opening", index, minutes.dropped)
     minutes.closing = _keep(raw.closing, "closing", index, minutes.dropped)
